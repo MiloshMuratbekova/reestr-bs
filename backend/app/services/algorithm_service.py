@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.algorithms.definitions import ALGORITHMS, ALGORITHMS_BY_CODE
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.db.clickhouse import ClickHouseError, clickhouse
+from app.db.clickhouse import ClickHouseError, clickhouse, heavy_settings
 from app.models import BsAlgorithm, BsAlgorithmHistory
 from app.utils.sql_script import describe_statement, split_statements
 
@@ -168,7 +168,11 @@ async def run_algorithm(
         for index, statement in enumerate(statements, start=1):
             step_started = time.perf_counter()
             logger.info("  %s шаг %d/%d: %s", code, index, len(statements), describe_statement(statement))
-            await clickhouse.execute(statement)
+            # Настройки памяти и переливания на диск нужны именно здесь:
+            # алгоритмы соединяют сотни млн строк. Остальным запросам системы
+            # они не передаются — сервер может их отклонить, и тогда падал бы
+            # даже обычный поиск (см. heavy_settings в db/clickhouse.py)
+            await clickhouse.execute(statement, query_settings=heavy_settings())
             executed.append(
                 {
                     "step": index,

@@ -30,13 +30,41 @@ def current_url() -> str:
 
 
 class ClickHouseError(RuntimeError):
-    """Ошибка выполнения запроса в ClickHouse."""
+    """Ошибка выполнения запроса в ClickHouse.
+
+    ``status_code`` различает два принципиально разных случая:
+      * ``None`` — до сервера не дошли (сеть, адрес, порт, таймаут соединения);
+      * число — сервер ответил и ОТКЛОНИЛ запрос (нет базы, нет прав,
+        неизвестная настройка, превышено ограничение).
+    Их нельзя показывать одинаково: в первом случае человек идёт проверять
+    сеть, во втором проверять сеть бессмысленно — надо читать текст ответа.
+    """
 
     def __init__(self, message: str, query: str = "", status_code: int | None = None):
         super().__init__(message)
         self.message = message
         self.query = query
         self.status_code = status_code
+
+    @property
+    def is_unreachable(self) -> bool:
+        """Сервер не ответил вовсе — только тогда уместно «нет связи»."""
+        return self.status_code is None
+
+
+def heavy_settings() -> Dict[str, Any]:
+    """Настройки для тяжёлых запросов алгоритмов (JOIN по сотням млн строк).
+
+    Передаются ТОЧЕЧНО, а не всем подряд: сервер вправе их отклонить, и тогда
+    обычный поиск, которому они не нужны, не должен из-за этого падать.
+    """
+    return {
+        "max_memory_usage": settings.CLICKHOUSE_MAX_MEMORY_USAGE,
+        # Большие JOIN-ы алгоритмов (ЭСФ ~485 млн строк) должны переливаться на диск
+        "join_algorithm": "partial_merge,hash",
+        "max_bytes_before_external_group_by": 8_000_000_000,
+        "max_bytes_before_external_sort": 8_000_000_000,
+    }
 
 
 # Запрещённые конструкции для произвольных (в т.ч. сгенерированных ИИ) запросов
@@ -122,15 +150,19 @@ class ClickHouseClient:
 
     # ------------------------------------------------------------------
     def _base_params(self, extra_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Минимум, необходимый любому запросу.
+
+        Здесь СОЗНАТЕЛЬНО нет настроек памяти и алгоритма соединений — см.
+        heavy_settings(). Они нужны только тяжёлым запросам алгоритмов, а
+        сервер может их отклонить (профиль пользователя ограничивает
+        max_memory_usage, либо настройка отсутствует в его версии). Пока они
+        уходили с КАЖДЫМ запросом, из-за них падал даже обычный поиск, и это
+        выглядело как «нет связи с ClickHouse», хотя связь была.
+        """
         params: Dict[str, Any] = {
             "database": runtime.get("CLICKHOUSE_DATABASE"),
             # Таймаут тяжёлого сканирования — редактируется через интерфейс
             "max_execution_time": runtime.get("CLICKHOUSE_MAX_EXECUTION_TIME"),
-            "max_memory_usage": settings.CLICKHOUSE_MAX_MEMORY_USAGE,
-            # Большие JOIN-ы алгоритмов (ЭСФ ~485 млн строк) должны переливаться на диск
-            "join_algorithm": "partial_merge,hash",
-            "max_bytes_before_external_group_by": 8_000_000_000,
-            "max_bytes_before_external_sort": 8_000_000_000,
         }
         if extra_settings:
             params.update(extra_settings)

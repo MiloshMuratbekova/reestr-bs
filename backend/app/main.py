@@ -22,7 +22,7 @@ from app.api.routes import api_router
 from app.core.config import settings
 from app.core.logging_config import get_logger, setup_logging
 from app.core.security import hash_password
-from app.db.clickhouse import ClickHouseError, clickhouse
+from app.db.clickhouse import ClickHouseError, clickhouse, current_url
 from app.db.postgres import SessionLocal, close_db, init_db
 from app.models import BsUser, UserRole
 from app.services import algorithm_service, registry_service
@@ -74,7 +74,7 @@ async def bootstrap() -> None:
 async def lifespan(app: FastAPI):
     logger.info("=" * 70)
     logger.info("Запуск системы «%s»", settings.APP_NAME)
-    logger.info("ClickHouse: %s", settings.clickhouse_url)
+    logger.info("ClickHouse: %s", current_url())
     logger.info("PostgreSQL: %s:%s/%s", settings.POSTGRES_HOST, settings.POSTGRES_PORT, settings.POSTGRES_DB)
     logger.info("ИИ Qwen:    %s (%s)", settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL)
     logger.info("=" * 70)
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
         except ClickHouseError as exc:
             logger.error("ClickHouse отвечает, но запрос не выполнен: %s", exc)
     else:
-        logger.error("ClickHouse недоступен по адресу %s", settings.clickhouse_url)
+        logger.error("ClickHouse недоступен по адресу %s", current_url())
 
     try:
         if await ollama.ping():
