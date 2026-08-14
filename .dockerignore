@@ -1,0 +1,27 @@
+# Виртуальные окружения и зависимости — ставятся внутри образа
+backend/.venv/
+frontend/node_modules/
+
+# Пакеты для установки без Docker: в образе не нужны, весят 25 МБ
+backend/wheels/
+
+# Локальные артефакты
+backend/local.db
+backend/logs/
+backend/.env
+# Настройки с паролями в образ не попадают — они живут в томе
+backend/data/
+frontend/dist/
+**/__pycache__/
+**/*.pyc
+
+# Готовые сборки релиза
+dist-release/
+*.tar
+*.tar.gz
+
+# Служебное
+.git/
+.gitignore
+.vscode/
+.idea/

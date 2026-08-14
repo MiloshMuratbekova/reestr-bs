@@ -1,0 +1,31 @@
+# ============================================================
+# Реестр БС — зависимости бэкенда
+# Закрытый контур: устанавливать из локального PyPI-зеркала либо
+# из каталога с wheel-файлами:
+#   pip install --no-index --find-links=./wheels -r requirements.txt
+# ============================================================
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# HTTP-клиент для ClickHouse и Ollama
+httpx==0.28.1
+
+# PostgreSQL (метаданные алгоритмов, пользователи, история изменений)
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+
+# SQLite — только для локального запуска без PostgreSQL (DATABASE_URL)
+aiosqlite==0.20.0
+
+# Авторизация
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+python-multipart==0.0.20
+
+# Служебное
+python-dateutil==2.9.0.post0

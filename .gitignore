@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Секреты и локальная конфигурация
+.env
+backend/.env
+backend/logs/
+backend/wheels/
+
+# Настройки, заданные через интерфейс: содержат пароли к ClickHouse и PostgreSQL
+backend/data/
+data/settings.json
+
+# Локальная база режима разработки
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Комплекты поставки
+dist-release/
+*.tar
+*.tar.gz
+
+# Редакторы
+.vscode/
+.idea/
+*.swp
+
+# ОС
+.DS_Store
+Thumbs.db

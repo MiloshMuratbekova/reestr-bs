@@ -1,0 +1,68 @@
+# =============================================================================
+# Реестр БС — вариант для Compose v2 (команда «docker compose», через пробел)
+#
+# На сервере 10.10.31.35 сейчас стоит compose 1.x, поэтому основным является
+# docker-compose.yml. Этот файл пригодится, когда сервер переведут на v2.
+#
+#   docker compose -p reestr-bs -f docker-compose.v2.yml up -d
+#
+# Отличия от основного файла:
+#   * есть «pull_policy: never» — v2 иначе попытается сходить за образом
+#     в интернет, даже если он уже загружен локально;
+#   * ключ «version» не нужен, в v2 он объявлен устаревшим.
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: reestr-bs-postgres
+    restart: unless-stopped
+    # Образ загружен через docker load. Без этого compose пойдёт за ним
+    # в интернет и упадёт: сервер изолирован.
+    pull_policy: never
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bs_registry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в файле .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bs_registry}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-bs_registry} -d ${POSTGRES_DB:-bs_registry}
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - reestr
+
+  app:
+    image: reestr-bs:1.0
+    container_name: reestr-bs-app
+    restart: unless-stopped
+    pull_policy: never
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8020}:8020"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      DATABASE_URL: ""
+    volumes:
+      - app-data:/app/data
+      - app-logs:/app/logs
+    networks:
+      - reestr
+
+volumes:
+  postgres-data:
+  app-data:
+  app-logs:
+
+networks:
+  reestr:

@@ -1,0 +1,89 @@
+# =============================================================================
+# Реестр БС — прод-конфиг для сервера 10.10.31.35
+#
+# Файл рассчитан на docker-compose версии 1.x — именно он стоит на сервере.
+# Запуск (ключ -f не нужен, это файл по умолчанию):
+#
+#   docker-compose -p reestr-bs up -d
+#
+# Только готовые образы: build: здесь быть не должно, на сервере нет ни
+# интернета, ни исходников. Образы приезжают через docker load.
+#
+# Почему формат «2.4», а не «3.x»: только версии 2.x поддерживают ожидание
+# готовности базы через depends_on.condition. В 3.x этот ключ игнорируется,
+# и приложение стартовало бы раньше PostgreSQL.
+#
+# Почему нет «pull_policy: never»: этого ключа в compose 1.x не существует,
+# файл с ним не запустится. Защита от похода в интернет здесь другая —
+# compose 1.x тянет образ только если его нет локально. Образы загружаются
+# заранее через «docker load -i images.tar.gz», поэтому обращения к сети
+# не происходит. Проверить перед запуском: docker images | grep reestr-bs
+#
+# Если сервер переведут на Compose v2 — используйте docker-compose.v2.yml,
+# там pull_policy: never прописан явно.
+# =============================================================================
+
+version: "2.4"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: reestr-bs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bs_registry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в файле .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bs_registry}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Наружу не публикуется: база доступна только приложению по внутренней
+    # сети compose. На сервере уже работает свой PostgreSQL на 5432 —
+    # занимать порт и пересекаться с ним нельзя.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bs_registry} -d ${POSTGRES_DB:-bs_registry}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - reestr
+
+  app:
+    image: reestr-bs:1.0
+    container_name: reestr-bs-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Единственный публикуемый порт — веб-интерфейс вместе с API.
+      # Вынесен в .env: 8090 занят drop-detector, 8081 — fm-monitor.
+      # Перед запуском проверьте: ss -tlnp | grep 8020
+      - "${WEB_PORT:-8020}:8020"
+    env_file:
+      - .env
+    environment:
+      # Имя сервиса в сети compose. Перекрывает значение из .env, иначе
+      # приложение искало бы PostgreSQL на localhost внутри контейнера.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # Пустое значение обязательно: непустое включило бы режим SQLite
+      DATABASE_URL: ""
+    volumes:
+      - app-data:/app/data
+      - app-logs:/app/logs
+    networks:
+      - reestr
+    # ClickHouse (192.168.122.45:8123) и Ollama (192.168.97.8:11434) —
+    # внешние службы контура. Обращение к ним идёт через шлюз хоста,
+    # дополнительной настройки сети не требуется.
+
+volumes:
+  # Именованные тома: переживают down и обновление образа.
+  # Получают префикс имени проекта — reestr-bs_postgres-data и т.д.,
+  # поэтому с томами соседних проектов не пересекаются.
+  postgres-data:
+  app-data:
+  app-logs:
+
+networks:
+  reestr:

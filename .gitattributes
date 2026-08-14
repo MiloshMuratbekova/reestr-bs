@@ -1,0 +1,27 @@
+# Нормализация переводов строк.
+# Проект собирается на Windows, а выполняется на Linux, поэтому концы строк
+# фиксируются явно: shell-скрипт с CRLF на Linux не запускается вовсе —
+# bash сообщает «bad interpreter».
+
+* text=auto eol=lf
+
+# Выполняются на Linux — только LF
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+.env.example text eol=lf
+
+# Выполняются на Windows — CRLF
+*.ps1       text eol=crlf
+
+# Двоичные файлы не трогать
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.tar       binary
+*.gz        binary
+*.whl       binary
