@@ -22,6 +22,22 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 $Stage = Join-Path $Root "dist-release\bundle"
 
+# Запись без метки порядка байт (BOM).
+# В Windows PowerShell 5.1 «Set-Content -Encoding utf8» ставит в начало файла
+# EF BB BF. Для .env это означает, что первая строка достаётся парсеру вместе
+# с меткой, а для docker-compose.yml — что YAML начинается с невидимых байт.
+# На сервере с Linux это ломает разбор, хотя в редакторе файл выглядит целым.
+function Write-PlainUtf8([string]$Path, [string]$Text) {
+    [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Чтение тоже должно быть явным. «Get-Content -Raw» без -Encoding в
+# PowerShell 5.1 принимает UTF-8-файл без метки за однобайтовую кодировку,
+# и русские комментарии превращаются в мусор ещё до записи.
+function Read-PlainUtf8([string]$Path) {
+    return [System.IO.File]::ReadAllText($Path, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # --- Проверка готовности Docker -------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker не найден. Установите Docker Desktop и повторите."
@@ -80,23 +96,33 @@ try { $in.CopyTo($gz) } finally { $gz.Dispose(); $out.Dispose(); $in.Dispose() }
 Remove-Item $imagesTar -Force
 
 # --- 5. Конфигурация с сгенерированными секретами --------------------------
-Write-Host "==> Формирование .env" -ForegroundColor Cyan
-function New-Secret([int]$Bytes = 32) {
-    $buffer = New-Object byte[] $Bytes
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buffer)
-    return [Convert]::ToBase64String($buffer).TrimEnd('=').Replace('/', '_').Replace('+', '-')
-}
-
-$adminPassword = New-Secret 12
-$envText = Get-Content "$Root\.env.example" -Raw
-$envText = $envText -replace '(?m)^POSTGRES_PASSWORD=.*',       ("POSTGRES_PASSWORD=" + (New-Secret 24))
-$envText = $envText -replace '(?m)^SECRET_KEY=.*',              ("SECRET_KEY=" + (New-Secret 48))
-$envText = $envText -replace '(?m)^FIRST_SUPERUSER_PASSWORD=.*', ("FIRST_SUPERUSER_PASSWORD=" + $adminPassword)
-Set-Content (Join-Path $Stage ".env") -Value $envText -Encoding utf8 -NoNewline
+Write-Host "==> Копирование .env" -ForegroundColor Cyan
+# Пароли постоянные и лежат в .env.example. Генерация убрана намеренно:
+# новый пароль на каждой сборке ломал уже развёрнутую базу — PostgreSQL
+# задаёт его только при создании тома и дальше держит старый.
+Copy-Item "$Root\.env.example" (Join-Path $Stage ".env")
 
 Copy-Item "$Root\docker-compose.yml"    $Stage
 Copy-Item "$Root\docker-compose.v2.yml" $Stage
 Copy-Item "$Root\docs\README-DEPLOY.md" $Stage
+
+# Тег образа в compose должен совпадать с тем, что реально собран. Иначе на
+# сервере compose не найдёт образ локально и полезет за ним в интернет,
+# которого там нет. Раньше версия подставлялась только в docker build,
+# а в compose оставалась прежней — и бандл выходил нерабочим.
+Write-Host "==> Простановка версии $Version в compose" -ForegroundColor Cyan
+foreach ($file in @("docker-compose.yml", "docker-compose.v2.yml")) {
+    $path = Join-Path $Stage $file
+    $text = Read-PlainUtf8 $path
+    $text = $text -replace 'image:\s*reestr-bs:[^\s]+', "image: $AppImage"
+    Write-PlainUtf8 $path $text
+}
+# Проверка: собранный тег обязан присутствовать в обоих файлах
+foreach ($file in @("docker-compose.yml", "docker-compose.v2.yml")) {
+    if (-not (Select-String -Path (Join-Path $Stage $file) -Pattern ([regex]::Escape("image: $AppImage")) -Quiet)) {
+        throw "В $file не проставился образ $AppImage"
+    }
+}
 
 # --- 6. Бандл ---------------------------------------------------------------
 Write-Host "==> Упаковка $Bundle" -ForegroundColor Cyan
@@ -115,8 +141,7 @@ Write-Host @"
 
  Образы в архиве: $AppImage, $PgImage
 
- ПАРОЛЬ АДМИНИСТРАТОРА: $adminPassword
- (записан в .env внутри бандла, поле FIRST_SUPERUSER_PASSWORD)
+ Вход в интерфейс отключён (AUTH_ENABLED=false в .env)
 
  На сервере (там установлен docker-compose 1.x):
    scp $Bundle user@10.10.31.35:/tmp/

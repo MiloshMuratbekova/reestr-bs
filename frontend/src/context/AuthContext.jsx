@@ -5,30 +5,55 @@ const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => tokenStorage.getUser())
-  const [loading, setLoading] = useState(Boolean(tokenStorage.get()))
+  // Ждём ответа /auth/mode всегда, даже когда токена нет: иначе интерфейс
+  // успел бы отправить на страницу входа до того, как выяснится, что вход
+  // отключён, и она бы мелькала при каждой загрузке
+  const [loading, setLoading] = useState(true)
 
-  // Проверяем токен при загрузке — он мог истечь между сессиями
+  // Сначала выясняем у сервера, нужен ли вход вообще. Если он отключён
+  // (AUTH_ENABLED=false), логин не показывается и пользователь считается
+  // вошедшим — иначе интерфейс требовал бы пароль, которого сервер уже
+  // не спрашивает. Только если вход нужен — проверяем сохранённый токен:
+  // он мог истечь между сессиями.
   useEffect(() => {
-    if (!tokenStorage.get()) {
-      setLoading(false)
-      return
-    }
     let cancelled = false
+
     authApi
-      .me()
+      .mode()
       .then(({ data }) => {
-        if (cancelled) return
-        setUser(data)
-        tokenStorage.setUser(data)
+        if (cancelled) return null
+        if (data?.auth_enabled === false) {
+          const guest = { username: 'служебный доступ', role: 'administrator' }
+          setUser(guest)
+          setLoading(false)
+          return null
+        }
+        if (!tokenStorage.get()) {
+          setLoading(false)
+          return null
+        }
+        return authApi
+          .me()
+          .then(({ data: profile }) => {
+            if (cancelled) return
+            setUser(profile)
+            tokenStorage.setUser(profile)
+          })
+          .catch(() => {
+            if (cancelled) return
+            tokenStorage.clear()
+            setUser(null)
+          })
+          .finally(() => {
+            if (!cancelled) setLoading(false)
+          })
       })
+      // Сервер недоступен или старой версии без /auth/mode — ведём себя
+      // как раньше: считаем, что вход нужен
       .catch(() => {
-        if (cancelled) return
-        tokenStorage.clear()
-        setUser(null)
-      })
-      .finally(() => {
         if (!cancelled) setLoading(false)
       })
+
     return () => {
       cancelled = true
     }

@@ -75,6 +75,9 @@ export function errorMessage(error, fallback = 'Не удалось выполн
 
 // --- Авторизация -----------------------------------------------------------
 export const authApi = {
+  // Спрашивается до входа: если сервер отвечает, что вход отключён,
+  // страница логина не показывается вовсе
+  mode: () => api.get('/auth/mode'),
   login: (username, password) => api.post('/auth/login', { username, password }),
   me: () => api.get('/auth/me'),
   listUsers: () => api.get('/auth/users'),

@@ -18,6 +18,16 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["Авторизация"])
 
 
+@router.get("/mode", summary="Требуется ли вход в систему")
+async def mode() -> dict:
+    """Открытый эндпоинт: интерфейс спрашивает до входа, нужен ли он вообще.
+
+    Если вход отключён, страница логина не показывается — иначе она бы
+    требовала пароль, которого сервер уже не спрашивает.
+    """
+    return {"auth_enabled": settings.AUTH_ENABLED}
+
+
 @router.post("/login", response_model=TokenResponse, summary="Вход в систему")
 async def login(payload: LoginRequest, session: SessionDep) -> TokenResponse:
     user = (
