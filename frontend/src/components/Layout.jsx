@@ -19,7 +19,7 @@ function NavItem({ to, children }) {
 }
 
 export default function Layout({ children }) {
-  const { user, isAdministrator, logout } = useAuth()
+  const { user, isAdministrator, authEnabled, logout } = useAuth()
   const navigate = useNavigate()
   const [changingPassword, setChangingPassword] = useState(false)
 
@@ -47,7 +47,9 @@ export default function Layout({ children }) {
           <nav className="flex items-center gap-1">
             <NavItem to="/search">Поиск</NavItem>
             {isAdministrator && <NavItem to="/algorithms">Алгоритмы</NavItem>}
-            {isAdministrator && <NavItem to="/users">Пользователи</NavItem>}
+            {/* При отключённом входе учётных записей нет: пользователь
+                служебный и в базе не существует */}
+            {isAdministrator && authEnabled && <NavItem to="/users">Пользователи</NavItem>}
             {isAdministrator && <NavItem to="/settings">Настройки</NavItem>}
           </nav>
 
@@ -58,20 +60,25 @@ export default function Layout({ children }) {
                 {user?.role === 'administrator' ? 'Администратор' : 'Пользователь'}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setChangingPassword(true)}
-              className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
-            >
-              Сменить пароль
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
-            >
-              Выйти
-            </button>
+            {/* Смена пароля и выход имеют смысл только когда вход включён */}
+            {authEnabled && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setChangingPassword(true)}
+                  className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
+                >
+                  Сменить пароль
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
+                >
+                  Выйти
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>

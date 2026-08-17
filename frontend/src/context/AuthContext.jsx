@@ -9,6 +9,9 @@ export function AuthProvider({ children }) {
   // успел бы отправить на страницу входа до того, как выяснится, что вход
   // отключён, и она бы мелькала при каждой загрузке
   const [loading, setLoading] = useState(true)
+  // По умолчанию считаем, что вход нужен: если /auth/mode не ответит,
+  // безопаснее показать логин, чем открыть систему всем
+  const [authEnabled, setAuthEnabled] = useState(true)
 
   // Сначала выясняем у сервера, нужен ли вход вообще. Если он отключён
   // (AUTH_ENABLED=false), логин не показывается и пользователь считается
@@ -24,10 +27,12 @@ export function AuthProvider({ children }) {
         if (cancelled) return null
         if (data?.auth_enabled === false) {
           const guest = { username: 'служебный доступ', role: 'administrator' }
+          setAuthEnabled(false)
           setUser(guest)
           setLoading(false)
           return null
         }
+        setAuthEnabled(true)
         if (!tokenStorage.get()) {
           setLoading(false)
           return null
@@ -85,8 +90,12 @@ export function AuthProvider({ children }) {
       logout,
       isAuthenticated: Boolean(user),
       isAdministrator: user?.role === 'administrator',
+      // Нужен интерфейсу, чтобы не показывать то, что при отключённом входе
+      // работать не может: смену пароля и управление учётными записями.
+      // Текущий пользователь тогда служебный, в базе его нет.
+      authEnabled,
     }),
-    [user, loading, login, logout],
+    [user, loading, login, logout, authEnabled],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
