@@ -82,15 +82,15 @@ async def get_company_info(bin_value: str) -> Optional[Dict[str, Any]]:
     company = await clickhouse.fetch_one(
         f"""
         SELECT
-            toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-            ifNull(toString(any(taxpayer_name)), '') AS taxpayer_name,
-            ifNull(toString(any(category)), '') AS category,
-            ifNull(toString(any(reg_start_date)), '') AS reg_start_date,
-            ifNull(toString(any(address)), '') AS address,
-            ifNull(toString(any(code_nd)), '') AS code_nd
-        FROM {settings.DICT_COMPANIES}
-        WHERE taxpayer_iin_bin = {{bin:String}}
-        GROUP BY taxpayer_iin_bin
+            toString(c.taxpayer_iin_bin) AS taxpayer_iin_bin,
+            ifNull(toString(any(c.taxpayer_name)), '') AS taxpayer_name,
+            ifNull(toString(any(c.category)), '') AS category,
+            ifNull(toString(any(c.reg_start_date)), '') AS reg_start_date,
+            ifNull(toString(any(c.address)), '') AS address,
+            ifNull(toString(any(c.code_nd)), '') AS code_nd
+        FROM {settings.DICT_COMPANIES} AS c
+        WHERE c.taxpayer_iin_bin = {{bin:String}}
+        GROUP BY c.taxpayer_iin_bin
         """,
         {"bin": bin_value},
     )
@@ -99,10 +99,10 @@ async def get_company_info(bin_value: str) -> Optional[Dict[str, Any]]:
 
     ownership = await clickhouse.fetch_one(
         f"""
-        SELECT ifNull(toString(ownership_type), '') AS ownership_type
-        FROM {settings.DICT_OWNERSHIP}
-        WHERE taxpayer_iin_bin = {{bin:String}}
-        ORDER BY _actual_date DESC
+        SELECT ifNull(toString(o.ownership_type), '') AS ownership_type
+        FROM {settings.DICT_OWNERSHIP} AS o
+        WHERE o.taxpayer_iin_bin = {{bin:String}}
+        ORDER BY o.`_actual_date` DESC
         LIMIT 1
         """,
         {"bin": bin_value},
@@ -119,15 +119,15 @@ async def get_founders(bin_value: str) -> List[Dict[str, Any]]:
     return await clickhouse.fetch_all(
         f"""
         SELECT DISTINCT
-            ifNull(toString(founder_iin_bin), '') AS founder_iin_bin,
-            ifNull(if(founder_ul_name = '',
-               concat(founder_last_name, ' ', founder_first_name, ' ', founder_part_name),
-               founder_ul_name), '') AS founder_name,
-            ifNull(toString(share_percentage), '') AS share_percentage,
-            toString(_actual_date) AS _actual_date
-        FROM {settings.TBL_FOUNDERS}
-        WHERE taxpayer_iin_bin = {{bin:String}}
-          AND _actual_date = (SELECT max(_actual_date) FROM {settings.TBL_FOUNDERS})
+            ifNull(toString(f.founder_iin_bin), '') AS founder_iin_bin,
+            ifNull(if(f.founder_ul_name = '',
+               concat(f.founder_last_name, ' ', f.founder_first_name, ' ', f.founder_part_name),
+               f.founder_ul_name), '') AS founder_name,
+            ifNull(toString(f.share_percentage), '') AS share_percentage,
+            toString(f.`_actual_date`) AS _actual_date
+        FROM {settings.TBL_FOUNDERS} AS f
+        WHERE f.taxpayer_iin_bin = {{bin:String}}
+          AND f.`_actual_date` = (SELECT max(`_actual_date`) FROM {settings.TBL_FOUNDERS})
         ORDER BY founder_name
         """,
         {"bin": bin_value},
@@ -139,12 +139,12 @@ async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
     return await clickhouse.fetch_all(
         f"""
         SELECT DISTINCT
-            ifNull(toString(employee_iin_bin), '') AS director_iin_bin,
-            ifNull(concat(employee_last_name, ' ', employee_first_name, ' ', employee_part_name), '') AS director_name,
-            toString(_actual_date) AS _actual_date
-        FROM {settings.TBL_DIRECTORS}
-        WHERE taxpayer_iin_bin = {{bin:String}}
-          AND _actual_date = (SELECT max(_actual_date) FROM {settings.TBL_DIRECTORS})
+            ifNull(toString(d.employee_iin_bin), '') AS director_iin_bin,
+            ifNull(concat(d.employee_last_name, ' ', d.employee_first_name, ' ', d.employee_part_name), '') AS director_name,
+            toString(d.`_actual_date`) AS _actual_date
+        FROM {settings.TBL_DIRECTORS} AS d
+        WHERE d.taxpayer_iin_bin = {{bin:String}}
+          AND d.`_actual_date` = (SELECT max(`_actual_date`) FROM {settings.TBL_DIRECTORS})
         ORDER BY director_name
         """,
         {"bin": bin_value},
@@ -225,16 +225,16 @@ async def search_companies(
     companies = await clickhouse.fetch_all(
         f"""
         SELECT
-            toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-            ifNull(toString(any(taxpayer_name)), '') AS taxpayer_name,
-            ifNull(toString(any(category)), '') AS category,
-            ifNull(toString(any(code_nd)), '') AS code_nd,
-            ifNull(toString(any(address)), '') AS address,
-            ifNull(toString(any(reg_start_date)), '') AS reg_start_date
-        FROM {settings.DICT_COMPANIES}
-        WHERE positionCaseInsensitive(taxpayer_iin_bin, {{q:String}}) > 0
-           OR positionCaseInsensitive(toString(taxpayer_name), {{q:String}}) > 0
-        GROUP BY taxpayer_iin_bin
+            toString(c.taxpayer_iin_bin) AS taxpayer_iin_bin,
+            ifNull(toString(any(c.taxpayer_name)), '') AS taxpayer_name,
+            ifNull(toString(any(c.category)), '') AS category,
+            ifNull(toString(any(c.code_nd)), '') AS code_nd,
+            ifNull(toString(any(c.address)), '') AS address,
+            ifNull(toString(any(c.reg_start_date)), '') AS reg_start_date
+        FROM {settings.DICT_COMPANIES} AS c
+        WHERE positionCaseInsensitive(c.taxpayer_iin_bin, {{q:String}}) > 0
+           OR positionCaseInsensitive(toString(c.taxpayer_name), {{q:String}}) > 0
+        GROUP BY c.taxpayer_iin_bin
         ORDER BY taxpayer_name
         LIMIT {{lim:UInt32}}
         """,
@@ -248,11 +248,11 @@ async def search_companies(
     ownership_rows = await clickhouse.fetch_all(
         f"""
         SELECT
-            toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-            ifNull(toString(argMax(ownership_type, _actual_date)), '') AS ownership_type
-        FROM {settings.DICT_OWNERSHIP}
-        WHERE taxpayer_iin_bin IN {{bins:Array(String)}}
-        GROUP BY taxpayer_iin_bin
+            toString(o.taxpayer_iin_bin) AS taxpayer_iin_bin,
+            ifNull(toString(argMax(o.ownership_type, o.`_actual_date`)), '') AS ownership_type
+        FROM {settings.DICT_OWNERSHIP} AS o
+        WHERE o.taxpayer_iin_bin IN {{bins:Array(String)}}
+        GROUP BY o.taxpayer_iin_bin
         """,
         {"bins": bins},
     )

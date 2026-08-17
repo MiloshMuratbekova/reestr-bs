@@ -33,6 +33,14 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
 
     Типы приводятся к общему виду: _actual_date в таблицах алгоритмов
     встречается и строкой, и датой; priority — целым разной ширины.
+
+    Колонки обязательно квалифицируются псевдонимом таблицы (``src.``).
+    Без него запись вида ``toString(taxpayer_iin_bin) AS taxpayer_iin_bin``
+    в ClickHouse 24+ (новый анализатор, включён по умолчанию) разбирается
+    как ссылка на создаваемый псевдоним, а не на колонку, и запрос падает:
+    «Unknown expression or function identifier `taxpayer_iin_bin`.
+    Maybe you meant: ['taxpayer_iin_bin']». В прежних версиях это работало,
+    поэтому ошибка проявляется только на новых серверах.
     """
     tables = [t for t in result_tables if t]
     if not tables:
@@ -42,14 +50,14 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
     for table in tables:
         parts.append(
             f"""    SELECT
-        toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-        toString(benefeciary_iin_bin) AS benefeciary_iin_bin,
-        toString(status) AS status,
-        toString(algorithm_code) AS algorithm_code,
-        toInt32(priority) AS priority,
-        toString(_actual_date) AS _actual_date,
-        toString(dop_info) AS dop_info
-    FROM {table}"""
+        toString(src.taxpayer_iin_bin) AS taxpayer_iin_bin,
+        toString(src.benefeciary_iin_bin) AS benefeciary_iin_bin,
+        toString(src.status) AS status,
+        toString(src.algorithm_code) AS algorithm_code,
+        toInt32(src.priority) AS priority,
+        toString(src.`_actual_date`) AS _actual_date,
+        toString(src.dop_info) AS dop_info
+    FROM {table} AS src"""
         )
     return "\n    UNION ALL\n".join(parts)
 
@@ -84,7 +92,7 @@ def build_registry_sql(
     # иначе запрос упадёт на этапе разбора.
     if category_source == "ownership":
         category_expr = "own.category"
-        ownership_category_select = ", any(category) AS category"
+        ownership_category_select = ", any(o.category) AS category"
     else:
         category_expr = "comp.category"
         ownership_category_select = ""
@@ -115,12 +123,12 @@ WITH base AS (
 -- Один балл на сочетание «пара + алгоритм»
 algo AS (
     SELECT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
-        algorithm_code,
-        any(priority) AS priority
-    FROM base
-    GROUP BY taxpayer_iin_bin, benefeciary_iin_bin, algorithm_code
+        b.taxpayer_iin_bin AS taxpayer_iin_bin,
+        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.algorithm_code AS algorithm_code,
+        any(b.priority) AS priority
+    FROM base AS b
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
 ),
 ball1_t AS (
     SELECT taxpayer_iin_bin, sum(priority) AS ball1
@@ -135,36 +143,41 @@ ball2_t AS (
 -- Справочники сворачиваются до одной строки на идентификатор,
 -- иначе LEFT JOIN размножит строки реестра
 persons AS (
-    SELECT taxpayer_iin_bin, any(taxpayer_name) AS person_name
-    FROM {settings.DICT_PERSONS}
-    WHERE taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
-    GROUP BY taxpayer_iin_bin
+    SELECT p.taxpayer_iin_bin AS taxpayer_iin_bin, any(p.taxpayer_name) AS person_name
+    FROM {settings.DICT_PERSONS} AS p
+    WHERE p.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    GROUP BY p.taxpayer_iin_bin
 ),
 companies AS (
-    SELECT taxpayer_iin_bin, any(taxpayer_name) AS company_name, any(category) AS category
-    FROM {settings.DICT_COMPANIES}
-    WHERE taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
-    GROUP BY taxpayer_iin_bin
+    SELECT
+        c.taxpayer_iin_bin AS taxpayer_iin_bin,
+        any(c.taxpayer_name) AS company_name,
+        any(c.category) AS category
+    FROM {settings.DICT_COMPANIES} AS c
+    WHERE c.taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
+    GROUP BY c.taxpayer_iin_bin
 ),
 ownership AS (
-    SELECT taxpayer_iin_bin, any(ownership_type) AS ownership_type{ownership_category_select}
-    FROM {settings.DICT_OWNERSHIP}
-    WHERE taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
-    GROUP BY taxpayer_iin_bin
+    SELECT
+        o.taxpayer_iin_bin AS taxpayer_iin_bin,
+        any(o.ownership_type) AS ownership_type{ownership_category_select}
+    FROM {settings.DICT_OWNERSHIP} AS o
+    WHERE o.taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
+    GROUP BY o.taxpayer_iin_bin
 ),
 documents AS (
     SELECT
-        taxpayer_iin_bin,
-        concat('номер документа: ', any(doc_number), ', номер серии: ', any(doc_seria)) AS doc_info
-    FROM {settings.DICT_DOCUMENTS}
-    WHERE taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
-    GROUP BY taxpayer_iin_bin
+        d.taxpayer_iin_bin AS taxpayer_iin_bin,
+        concat('номер документа: ', any(d.doc_number), ', номер серии: ', any(d.doc_seria)) AS doc_info
+    FROM {settings.DICT_DOCUMENTS} AS d
+    WHERE d.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    GROUP BY d.taxpayer_iin_bin
 ),
 shares AS (
-    SELECT benefeciary_iin_bin, any(share_percentage) AS share_percentage
-    FROM {settings.DICT_SHARES}
-    WHERE benefeciary_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
-    GROUP BY benefeciary_iin_bin
+    SELECT s.benefeciary_iin_bin AS benefeciary_iin_bin, any(s.share_percentage) AS share_percentage
+    FROM {settings.DICT_SHARES} AS s
+    WHERE s.benefeciary_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    GROUP BY s.benefeciary_iin_bin
 ),
 -- Имя бенефициара определяется на уровне строки: правило подстановки
 -- из dop_info зависит от кода алгоритма
@@ -187,18 +200,18 @@ named AS (
 ),
 pairs AS (
     SELECT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
+        n.taxpayer_iin_bin AS taxpayer_iin_bin,
+        n.benefeciary_iin_bin AS benefeciary_iin_bin,
         -- при нескольких сработавших алгоритмах побеждает статус с наименьшим
         -- баллом: регистрационный (priority 0) важнее предполагаемого
-        argMin(status, priority) AS status,
-        argMin(benefeciary_name, priority) AS benefeciary_name,
-        argMin(dop_info, priority) AS dop_info,
-        arraySort(groupUniqArray(algorithm_code)) AS algorithm_codes,
-        min(priority) AS min_priority,
-        max(_actual_date) AS _actual_date
-    FROM named
-    GROUP BY taxpayer_iin_bin, benefeciary_iin_bin
+        argMin(n.status, n.priority) AS status,
+        argMin(n.benefeciary_name, n.priority) AS benefeciary_name,
+        argMin(n.dop_info, n.priority) AS dop_info,
+        arraySort(groupUniqArray(n.algorithm_code)) AS algorithm_codes,
+        min(n.priority) AS min_priority,
+        max(n.`_actual_date`) AS _actual_date
+    FROM named AS n
+    GROUP BY n.taxpayer_iin_bin, n.benefeciary_iin_bin
 )
 SELECT
     pr.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -242,30 +255,40 @@ def build_company_summary_sql(result_tables: Iterable[str], company_filter: str)
     union_sql = build_union_sql(result_tables)
     return f"""
 WITH base AS (
+    -- Приведение типов уже сделано в объединении, повторять его здесь нельзя:
+    -- «toString(x) AS x» новый анализатор ClickHouse принимает за ссылку
+    -- на создаваемый псевдоним и запрос падает
     SELECT DISTINCT
-        toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-        toString(benefeciary_iin_bin) AS benefeciary_iin_bin,
-        toString(algorithm_code) AS algorithm_code,
-        toInt32(priority) AS priority
+        taxpayer_iin_bin,
+        benefeciary_iin_bin,
+        algorithm_code,
+        priority
     FROM (
 {union_sql}
     )
     WHERE {company_filter}
 ),
 algo AS (
-    SELECT taxpayer_iin_bin, benefeciary_iin_bin, algorithm_code, any(priority) AS priority
-    FROM base
-    GROUP BY taxpayer_iin_bin, benefeciary_iin_bin, algorithm_code
+    SELECT
+        b.taxpayer_iin_bin AS taxpayer_iin_bin,
+        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.algorithm_code AS algorithm_code,
+        any(b.priority) AS priority
+    FROM base AS b
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
 ),
 ball2_t AS (
-    SELECT taxpayer_iin_bin, benefeciary_iin_bin, sum(priority) AS ball2
-    FROM algo
-    GROUP BY taxpayer_iin_bin, benefeciary_iin_bin
+    SELECT
+        a.taxpayer_iin_bin AS taxpayer_iin_bin,
+        a.benefeciary_iin_bin AS benefeciary_iin_bin,
+        sum(a.priority) AS ball2
+    FROM algo AS a
+    GROUP BY a.taxpayer_iin_bin, a.benefeciary_iin_bin
 ),
 ball1_t AS (
-    SELECT taxpayer_iin_bin, sum(priority) AS ball1
-    FROM algo
-    GROUP BY taxpayer_iin_bin
+    SELECT a.taxpayer_iin_bin AS taxpayer_iin_bin, sum(a.priority) AS ball1
+    FROM algo AS a
+    GROUP BY a.taxpayer_iin_bin
 )
 SELECT
     b2.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -283,11 +306,11 @@ def build_stats_sql(result_tables: Iterable[str]) -> str:
     return f"""
 WITH base AS (
     SELECT DISTINCT
-        toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-        toString(benefeciary_iin_bin) AS benefeciary_iin_bin,
-        toString(status) AS status,
-        toString(algorithm_code) AS algorithm_code,
-        toInt32(priority) AS priority
+        taxpayer_iin_bin,
+        benefeciary_iin_bin,
+        status,
+        algorithm_code,
+        priority
     FROM (
 {union_sql}
     )
@@ -295,12 +318,12 @@ WITH base AS (
 )
 SELECT
     count() AS total_rows,
-    uniqExact(taxpayer_iin_bin) AS company_count,
-    uniqExact(benefeciary_iin_bin) AS beneficiary_count,
-    uniqExactIf(benefeciary_iin_bin, status LIKE 'Регистрационный%') AS registration_count,
-    uniqExactIf(benefeciary_iin_bin, status LIKE 'Предполагаемый%') AS assumed_count,
-    uniqExactIf(benefeciary_iin_bin, status LIKE '%нерезидент%') AS nonresident_count
-FROM base
+    uniqExact(b.taxpayer_iin_bin) AS company_count,
+    uniqExact(b.benefeciary_iin_bin) AS beneficiary_count,
+    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE 'Регистрационный%') AS registration_count,
+    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE 'Предполагаемый%') AS assumed_count,
+    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE '%нерезидент%') AS nonresident_count
+FROM base AS b
 """.strip()
 
 
@@ -309,21 +332,21 @@ def build_stats_by_algorithm_sql(result_tables: Iterable[str]) -> str:
     union_sql = build_union_sql(result_tables)
     return f"""
 SELECT
-    algorithm_code,
-    any(priority) AS priority,
-    uniqExact(taxpayer_iin_bin) AS company_count,
-    uniqExact(benefeciary_iin_bin) AS beneficiary_count,
+    d.algorithm_code AS algorithm_code,
+    any(d.priority) AS priority,
+    uniqExact(d.taxpayer_iin_bin) AS company_count,
+    uniqExact(d.benefeciary_iin_bin) AS beneficiary_count,
     count() AS row_count
 FROM (
     SELECT DISTINCT
-        toString(taxpayer_iin_bin) AS taxpayer_iin_bin,
-        toString(benefeciary_iin_bin) AS benefeciary_iin_bin,
-        toString(algorithm_code) AS algorithm_code,
-        toInt32(priority) AS priority
+        taxpayer_iin_bin,
+        benefeciary_iin_bin,
+        algorithm_code,
+        priority
     FROM (
 {union_sql}
     )
-)
-GROUP BY algorithm_code
-ORDER BY algorithm_code
+) AS d
+GROUP BY d.algorithm_code
+ORDER BY d.algorithm_code
 """.strip()
