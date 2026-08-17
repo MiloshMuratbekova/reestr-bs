@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
+import ChangePasswordDialog from './ChangePasswordDialog.jsx'
 
 function NavItem({ to, children }) {
   return (
@@ -19,6 +21,7 @@ function NavItem({ to, children }) {
 export default function Layout({ children }) {
   const { user, isAdministrator, logout } = useAuth()
   const navigate = useNavigate()
+  const [changingPassword, setChangingPassword] = useState(false)
 
   const handleLogout = () => {
     logout()
@@ -44,6 +47,7 @@ export default function Layout({ children }) {
           <nav className="flex items-center gap-1">
             <NavItem to="/search">Поиск</NavItem>
             {isAdministrator && <NavItem to="/algorithms">Алгоритмы</NavItem>}
+            {isAdministrator && <NavItem to="/users">Пользователи</NavItem>}
             {isAdministrator && <NavItem to="/settings">Настройки</NavItem>}
           </nav>
 
@@ -54,6 +58,13 @@ export default function Layout({ children }) {
                 {user?.role === 'administrator' ? 'Администратор' : 'Пользователь'}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setChangingPassword(true)}
+              className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
+            >
+              Сменить пароль
+            </button>
             <button
               type="button"
               onClick={handleLogout}
@@ -72,6 +83,11 @@ export default function Layout({ children }) {
           Реестр БС · закрытый контур · данные ограниченного доступа
         </div>
       </footer>
+
+      <ChangePasswordDialog
+        open={changingPassword}
+        onClose={() => setChangingPassword(false)}
+      />
     </div>
   )
 }

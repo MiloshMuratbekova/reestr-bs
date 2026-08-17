@@ -80,8 +80,16 @@ export const authApi = {
   mode: () => api.get('/auth/mode'),
   login: (username, password) => api.post('/auth/login', { username, password }),
   me: () => api.get('/auth/me'),
+  changePassword: (currentPassword, newPassword) =>
+    api.post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
   listUsers: () => api.get('/auth/users'),
   createUser: (payload) => api.post('/auth/users', payload),
+  updateUser: (username, payload) =>
+    api.patch(`/auth/users/${encodeURIComponent(username)}`, payload),
+  deleteUser: (username) => api.delete(`/auth/users/${encodeURIComponent(username)}`),
 }
 
 // --- Реестр ----------------------------------------------------------------

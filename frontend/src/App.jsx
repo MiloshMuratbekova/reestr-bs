@@ -7,6 +7,7 @@ import CompanyPage from './pages/CompanyPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import SearchPage from './pages/SearchPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
+import UsersPage from './pages/UsersPage.jsx'
 
 function Protected({ children, adminOnly = false }) {
   const { isAuthenticated, isAdministrator, loading } = useAuth()
@@ -43,6 +44,14 @@ export default function App() {
         element={
           <Protected adminOnly>
             <AlgorithmsPage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <Protected adminOnly>
+            <UsersPage />
           </Protected>
         }
       />

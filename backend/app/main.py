@@ -64,6 +64,21 @@ async def bootstrap() -> None:
                 await session.rollback()
                 logger.info("Администратор создан другим процессом приложения")
 
+        elif settings.ADMIN_PASSWORD_RESET:
+            # Аварийный вход, когда пароль утерян. Запись уже существует,
+            # поэтому FIRST_SUPERUSER_PASSWORD сам по себе не применился бы:
+            # том с базой переживает обновление образа.
+            admin.password_hash = hash_password(settings.FIRST_SUPERUSER_PASSWORD)
+            admin.role = UserRole.ADMINISTRATOR.value
+            admin.is_active = True
+            await session.commit()
+            logger.warning(
+                "ADMIN_PASSWORD_RESET включён: пароль %s сброшен к значению из "
+                "FIRST_SUPERUSER_PASSWORD. Войдите и ВЫКЛЮЧИТЕ этот параметр, "
+                "иначе пароль будет сбрасываться при каждом запуске.",
+                settings.FIRST_SUPERUSER,
+            )
+
         # Каталог алгоритмов
         created = await algorithm_service.seed_algorithms(session)
         if created == 0:

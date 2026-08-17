@@ -141,7 +141,9 @@ Write-Host @"
 
  Образы в архиве: $AppImage, $PgImage
 
- Вход в интерфейс отключён (AUTH_ENABLED=false в .env)
+ Вход в интерфейс отключён (AUTH_ENABLED=false в .env).
+ Если включить AUTH_ENABLED=true — вход admin / admin, дальше пароль
+ меняется в интерфейсе: кнопка «Сменить пароль» или раздел «Пользователи».
 
  На сервере (там установлен docker-compose 1.x):
    scp $Bundle user@10.10.31.35:/tmp/

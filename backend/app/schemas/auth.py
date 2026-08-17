@@ -36,3 +36,27 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=6, max_length=256)
     role: str = Field(default="user", pattern="^(administrator|user)$")
     full_name: str = ""
+
+
+class UserUpdate(BaseModel):
+    """Изменение учётной записи администратором.
+
+    Передаются только те поля, которые действительно меняются.
+    Пустой пароль не трогает существующий.
+    """
+
+    password: Optional[str] = Field(default=None, min_length=6, max_length=256)
+    role: Optional[str] = Field(default=None, pattern="^(administrator|user)$")
+    full_name: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    """Смена собственного пароля.
+
+    Текущий пароль запрашивается намеренно: иначе оставленная без присмотра
+    открытая сессия позволяла бы захватить учётную запись.
+    """
+
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=6, max_length=256)
