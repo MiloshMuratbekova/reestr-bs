@@ -108,6 +108,17 @@ class AlgorithmStat(BaseModel):
     row_count: int = 0
 
 
+class TopCompany(BaseModel):
+    taxpayer_iin_bin: str
+    taxpayer_name: str = ""
+    code_nd: str = ""
+    region: str = ""
+    beneficiary_count: int = 0
+    max_ball3: float = 0.0
+
+    model_config = {"extra": "ignore"}
+
+
 class StatsResponse(BaseModel):
     total_rows: int = 0
     company_count: int = 0
@@ -118,3 +129,13 @@ class StatsResponse(BaseModel):
     algorithms_total: int = 0
     algorithms_calculated: int = 0
     by_algorithm: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # --- разрезы дашборда ---
+    #: Всего юридических лиц в справочнике, а не только попавших в реестр
+    total_companies: int = 0
+    companies_with_bs: int = 0
+    high_risk_count: int = 0
+    medium_risk_count: int = 0
+    low_risk_count: int = 0
+    top_by_beneficiaries: List[TopCompany] = Field(default_factory=list)
+    top_by_risk: List[TopCompany] = Field(default_factory=list)

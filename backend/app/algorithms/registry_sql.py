@@ -97,9 +97,12 @@ def build_registry_sql(
         category_expr = "comp.category"
         ownership_category_select = ""
 
+    # Дополнительные условия дописываются к уже имеющемуся WHERE через AND.
+    # Отдельным словом WHERE их писать нельзя — в запросе он уже есть
+    # (фильтр из ТЗ по пустому бенефициару), и второй сломал бы разбор.
     having = ""
     if extra_conditions:
-        having = "WHERE " + " AND ".join(extra_conditions)
+        having = "AND (" + " AND ".join(extra_conditions) + ")"
 
     # Ограничение числа строк ставится в самом запросе: даже если клиент
     # попросит больше, до него дойдёт только разрешённое количество
@@ -246,13 +249,20 @@ WHERE NOT (pr.benefeciary_iin_bin = '' AND pr.benefeciary_name = '')
 """.strip()
 
 
-def build_company_summary_sql(result_tables: Iterable[str], company_filter: str) -> str:
+def build_company_summary_sql(
+    result_tables: Iterable[str], company_filter: Optional[str] = None
+) -> str:
     """Сводка по компаниям для страницы поиска.
 
     Возвращает количество уникальных бенефициаров и максимальный ball3
     по каждому taxpayer_iin_bin, попавшему в фильтр.
+
+    Без фильтра считается весь реестр — так строятся дашборд и список ЮЛ.
+    Запрос при этом тяжёлый, поэтому его результат кешируется в
+    ``listing_service``, а не запрашивается на каждое обращение.
     """
     union_sql = build_union_sql(result_tables)
+    where_clause = f"WHERE {company_filter}" if company_filter else ""
     return f"""
 WITH base AS (
     -- Приведение типов уже сделано в объединении, повторять его здесь нельзя:
@@ -266,7 +276,7 @@ WITH base AS (
     FROM (
 {union_sql}
     )
-    WHERE {company_filter}
+    {where_clause}
 ),
 algo AS (
     SELECT

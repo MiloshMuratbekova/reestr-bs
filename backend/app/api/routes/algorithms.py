@@ -17,7 +17,7 @@ from app.schemas.algorithm import (
     AlgorithmUpdate,
     RecalculateResponse,
 )
-from app.services import ai_service, algorithm_service
+from app.services import ai_service, algorithm_service, schedule_service
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["Алгоритмы"])
@@ -155,6 +155,19 @@ async def ai_update(
     summary="Пересчитать все алгоритмы последовательно",
 )
 async def recalculate(session: SessionDep, user: AdminUser):
+    """Пересчёт идёт через schedule_service — тогда он попадает в историю
+    запусков наравне с ночным и сбрасывает кеш сводных разрезов.
+    """
+    running = await schedule_service.active_run(session)
+    if running is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Пересчёт уже выполняется с {running.started_at:%d.%m.%Y %H:%M} "
+            f"(инициатор: {running.triggered_by or 'система'}). Дождитесь завершения.",
+        )
+
     logger.info("Пересчёт реестра запущен пользователем %s", user.username)
-    result = await algorithm_service.recalculate_all(session, triggered_by=user.username)
+    result = await schedule_service.run_recalculation(
+        trigger="manual", triggered_by=user.username, session=session
+    )
     return RecalculateResponse(**result)

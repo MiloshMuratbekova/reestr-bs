@@ -105,6 +105,51 @@ export const registryApi = {
   health: () => api.get('/health'),
 }
 
+// --- Списки: ЮЛ, бенефициары, структуры владения, источники ----------------
+export const listingApi = {
+  companies: (params) => api.get('/companies', { params }),
+  beneficiaries: (params) => api.get('/beneficiaries', { params }),
+  beneficiary: (iin) => api.get(`/beneficiaries/${encodeURIComponent(iin)}`),
+  ownership: (id) => api.get(`/ownership/${encodeURIComponent(id)}`),
+  sources: () => api.get('/sources'),
+}
+
+// --- Отчёты ----------------------------------------------------------------
+export const reportsApi = {
+  templates: () => api.get('/reports/templates'),
+  history: (limit = 30) => api.get('/reports', { params: { limit } }),
+  generate: (template, fileFormat, parameters = {}) =>
+    api.post('/reports/generate', {
+      template,
+      file_format: fileFormat,
+      parameters,
+    }),
+  remove: (id) => api.delete(`/reports/${id}`),
+  // Файл забирается запросом с токеном, а не обычной ссылкой:
+  // при включённом входе браузер не приложит заголовок Authorization
+  download: (id) => api.get(`/reports/${id}/download`, { responseType: 'blob' }),
+}
+
+// --- Расписание ночного пересчёта ------------------------------------------
+export const scheduleApi = {
+  get: () => api.get('/schedule'),
+  save: (payload) => api.post('/schedule', payload),
+  runs: (limit = 20) => api.get('/schedule/runs', { params: { limit } }),
+  runNow: () => api.post('/schedule/run'),
+}
+
+/** Сохраняет полученный файл на диск пользователя. */
+export function saveBlob(blob, fileName) {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 // --- Настройки подключений и лимитов ---------------------------------------
 export const settingsApi = {
   get: () => api.get('/settings'),

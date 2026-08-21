@@ -29,5 +29,14 @@ python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 python-multipart==0.0.20
 
+# Отчёты. openpyxl пишет xlsx, reportlab — pdf.
+# Кириллический шрифт для PDF берётся из состава reportlab (Bitstream Vera):
+# скачивать шрифты в закрытом контуре неоткуда.
+openpyxl==3.1.5
+reportlab==4.2.5
+
 # Служебное
 python-dateutil==2.9.0.post0
+# База часовых поясов: расписание ночного пересчёта считается в Asia/Almaty,
+# а в образе python:slim системная база может отсутствовать
+tzdata==2024.2

@@ -17,7 +17,7 @@ from app.schemas.registry import (
     ExplainResponse,
     StatsResponse,
 )
-from app.services import ai_service, registry_service
+from app.services import ai_service, listing_service, registry_service
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["Реестр БС"])
@@ -162,8 +162,15 @@ async def chat(payload: ChatRequest, session: SessionDep, user: CurrentUser) -> 
 
 @router.get("/stats", response_model=StatsResponse, summary="Общая статистика реестра")
 async def stats(session: SessionDep, _: CurrentUser) -> dict:
+    """Показатели дашборда.
+
+    Помимо общей статистики реестра возвращает разрезы, нужные только
+    дашборду: всего ЮЛ в справочнике, распределение по уровню риска и
+    два списка топ-10. Они считаются по всему реестру, поэтому держатся
+    в памяти процесса несколько минут — см. listing_service.
+    """
     try:
-        return await registry_service.get_stats(session)
+        return await listing_service.dashboard(session)
     except ClickHouseError as exc:
         logger.error("Статистика не рассчитана: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc

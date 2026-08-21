@@ -52,6 +52,11 @@ async def detect_category_source() -> str:
     return _category_source
 
 
+def category_source() -> str:
+    """Определённый на старте источник поля category — нужен другим сервисам."""
+    return _category_source
+
+
 def is_state_owned(ownership_type: Optional[str]) -> bool:
     """Государственная компания — по признаку из AFM_2_1_8.
 

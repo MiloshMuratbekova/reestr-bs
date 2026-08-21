@@ -7,6 +7,7 @@ ClickHouse 192.168.122.45:8123, Qwen через Ollama 192.168.97.8:11434.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from app.core.security import hash_password
 from app.db.clickhouse import ClickHouseError, clickhouse, current_url
 from app.db.postgres import SessionLocal, close_db, init_db
 from app.models import BsUser, UserRole
-from app.services import algorithm_service, registry_service
+from app.services import algorithm_service, registry_service, schedule_service
 from app.services.ai_service import AiError, ollama
 
 setup_logging()
@@ -84,6 +85,9 @@ async def bootstrap() -> None:
         if created == 0:
             logger.info("Каталог алгоритмов уже заполнен")
 
+        # Строка расписания ночного пересчёта (по умолчанию выключено)
+        await schedule_service.ensure_schedule(session)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -120,7 +124,18 @@ async def lifespan(app: FastAPI):
     except AiError as exc:
         logger.warning("Проверка сервера ИИ не выполнена: %s", exc)
 
+    # Планировщик ночного пересчёта. Задача поднимается в каждом воркере,
+    # но право на запуск разыгрывается через строку расписания в PostgreSQL,
+    # поэтому пересчёт стартует ровно один раз.
+    scheduler = asyncio.create_task(schedule_service.scheduler_loop())
+
     yield
+
+    scheduler.cancel()
+    try:
+        await scheduler
+    except asyncio.CancelledError:
+        pass
 
     await clickhouse.close()
     await ollama.close()

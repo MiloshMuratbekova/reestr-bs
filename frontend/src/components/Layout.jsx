@@ -1,95 +1,44 @@
 import { useState } from 'react'
-import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import ChangePasswordDialog from './ChangePasswordDialog.jsx'
+import Sidebar from './Sidebar.jsx'
 
-function NavItem({ to, children }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        `rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-          isActive ? 'bg-white/15 text-white' : 'text-afm-100 hover:bg-white/10 hover:text-white'
-        }`
-      }
-    >
-      {children}
-    </NavLink>
-  )
-}
-
+/**
+ * Каркас страницы: тёмная боковая панель слева, светлый контент справа.
+ * Кнопка смены пароля вынесена в верхнюю полосу контента — в свёрнутой
+ * панели ей не хватает места, а прятать её от пользователя нельзя.
+ */
 export default function Layout({ children }) {
-  const { user, isAdministrator, authEnabled, logout } = useAuth()
-  const navigate = useNavigate()
+  const { authEnabled } = useAuth()
   const [changingPassword, setChangingPassword] = useState(false)
 
-  const handleLogout = () => {
-    logout()
-    navigate('/login', { replace: true })
-  }
-
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="bg-afm-700 shadow">
-        <div className="mx-auto flex max-w-[1600px] items-center gap-6 px-6 py-3">
-          <Link to="/" className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded bg-white/15 text-lg font-bold text-white">
-              БС
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold text-white">Реестр БС</div>
-              <div className="text-[11px] text-afm-200">
-                Агентство по финансовому мониторингу РК
-              </div>
-            </div>
-          </Link>
+    <div className="flex h-full">
+      <Sidebar />
 
-          <nav className="flex items-center gap-1">
-            <NavItem to="/search">Поиск</NavItem>
-            {isAdministrator && <NavItem to="/algorithms">Алгоритмы</NavItem>}
-            {/* При отключённом входе учётных записей нет: пользователь
-                служебный и в базе не существует */}
-            {isAdministrator && authEnabled && <NavItem to="/users">Пользователи</NavItem>}
-            {isAdministrator && <NavItem to="/settings">Настройки</NavItem>}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-4">
-            <div className="text-right leading-tight">
-              <div className="text-sm font-medium text-white">{user?.username}</div>
-              <div className="text-[11px] text-afm-200">
-                {user?.role === 'administrator' ? 'Администратор' : 'Пользователь'}
-              </div>
-            </div>
-            {/* Смена пароля и выход имеют смысл только когда вход включён */}
-            {authEnabled && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setChangingPassword(true)}
-                  className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
-                >
-                  Сменить пароль
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="rounded-md border border-white/25 px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
-                >
-                  Выйти
-                </button>
-              </>
-            )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {authEnabled && (
+          <div className="flex justify-end border-b border-slate-200 bg-white px-6 py-2">
+            <button
+              type="button"
+              onClick={() => setChangingPassword(true)}
+              className="text-sm text-slate-500 transition-colors hover:text-afm-600"
+            >
+              Сменить пароль
+            </button>
           </div>
-        </div>
-      </header>
+        )}
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-6">{children}</main>
+        <main className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+        </main>
 
-      <footer className="border-t border-slate-200 bg-white py-3">
-        <div className="mx-auto max-w-[1600px] px-6 text-xs text-slate-400">
-          Реестр БС · закрытый контур · данные ограниченного доступа
-        </div>
-      </footer>
+        <footer className="border-t border-slate-200 bg-white py-3">
+          <div className="mx-auto max-w-[1600px] px-6 text-xs text-slate-400">
+            Реестр БС · закрытый контур · данные ограниченного доступа
+          </div>
+        </footer>
+      </div>
 
       <ChangePasswordDialog
         open={changingPassword}

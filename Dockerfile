@@ -38,6 +38,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Шрифт с кириллицей — им печатаются отчёты PDF. Стандартные шрифты PDF
+# русских букв не содержат, а шрифт, встроенный в reportlab (Bitstream Vera),
+# кириллицы тоже не имеет: файл собирается, но текст выходит пустым.
+# Ставится здесь, при сборке на машине с интернетом — в закрытом контуре
+# скачать его будет неоткуда.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 # Зависимости — отдельным слоем, до копирования кода
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
