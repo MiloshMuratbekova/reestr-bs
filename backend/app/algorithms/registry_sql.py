@@ -24,8 +24,13 @@ from typing import Dict, Iterable, List, Optional
 from app.core.config import settings
 
 # Алгоритмы, у которых имя бенефициара при отсутствии в справочнике ФЛ
-# берётся из первой части dop_info до первой запятой (по ТЗ).
-DOP_INFO_FIRST_PART_ALGORITHMS = ("БС-7", "БС-17")
+# берётся из первой части dop_info до первой запятой.
+#
+# Перечень взят из итоговой таблицы AFM_6_1_99: у этих алгоритмов dop_info
+# начинается с ФИО, а дальше через запятую идут сведения об источнике —
+# гражданство, документ, доля. У остальных dop_info целиком является именем,
+# и обрезать его по запятой нельзя.
+DOP_INFO_FIRST_PART_ALGORITHMS = ("БС-7", "БС-14", "БС-17")
 
 
 def build_union_sql(result_tables: Iterable[str]) -> str:
@@ -69,6 +74,7 @@ def build_registry_sql(
     category_source: str = "ownership",
     extra_conditions: Optional[List[str]] = None,
     row_limit: Optional[int] = None,
+    resolution_map: Optional[str] = None,
 ) -> str:
     """Собирает SQL итогового реестра.
 
@@ -84,7 +90,6 @@ def build_registry_sql(
     :param extra_conditions: дополнительные условия на итоговую выборку
     """
     union_sql = build_union_sql(result_tables)
-    base_where = f"WHERE {company_filter}" if company_filter else ""
 
     first_part_list = ", ".join(f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS)
 
@@ -104,12 +109,60 @@ def build_registry_sql(
     if extra_conditions:
         having = "AND (" + " AND ".join(extra_conditions) + ")"
 
+    # ------------------------------------------------------------------
+    # Доведение бенефициара до физического лица.
+    #
+    # Бенефициарный собственник по определению — физическое лицо. Часть
+    # алгоритмов возвращает юридическое: акционером числится ТОО, учредителем
+    # с долей 25% — другая компания. Такое ЮЛ не ответ, а промежуточное звено.
+    #
+    # Сама раскрутка цепочки здесь не выполняется — она посчитана заранее
+    # и лежит в карте UL_RESOLUTION_TABLE (см. build_ul_resolution_sql).
+    # Причина простая: перебор по всем алгоритмам на четыре уровня — это
+    # около сотни обращений к таблицам, и вставлять его в КАЖДЫЙ запрос
+    # реестра нельзя, запрос переставал планироваться за разумное время.
+    # Карта строится один раз, в конце ночного пересчёта.
+    # ------------------------------------------------------------------
+    owner_join = ""
+    resolved_expr = "r.benefeciary_iin_bin"
+    if resolution_map:
+        owner_join = (
+            f"LEFT JOIN {resolution_map} AS w"
+            " ON r.benefeciary_iin_bin = w.ul_iin_bin"
+        )
+        resolved_expr = (
+            "if(left(right(r.benefeciary_iin_bin, 8), 1) IN ('4', '5')"
+            " AND COALESCE(w.fl_iin_bin, '') != '',"
+            " w.fl_iin_bin, r.benefeciary_iin_bin)"
+        )
+
+    # Бенефициарный собственник — всегда физическое лицо. Юридическое,
+    # которое не удалось развернуть до ФЛ даже за четыре уровня, в реестр
+    # не попадает: это не ответ, а тупик в цепочке владения.
+    #
+    # Отсев делается в base, до расчёта баллов, а не в конце. Иначе такая
+    # строка входила бы в ball1 компании и занижала вероятность настоящих
+    # бенефициаров — при том что сама в выдаче не показывалась бы.
+    base_conditions: List[str] = []
+    if company_filter:
+        base_conditions.append(f"({company_filter})")
+    if resolution_map:
+        base_conditions.append("left(right(benefeciary_iin_bin, 8), 1) NOT IN ('4', '5')")
+    base_where = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
+
+    # Отбор по компании можно применить ещё до подстановки: замена меняет
+    # бенефициара, но никогда не трогает taxpayer_iin_bin. Для карточки
+    # компании это решающее — иначе пришлось бы разворачивать весь реестр.
+    prefilter = ""
+    if company_filter and "benefeciary_iin_bin" not in company_filter:
+        prefilter = f"WHERE {company_filter}"
+
     # Ограничение числа строк ставится в самом запросе: даже если клиент
     # попросит больше, до него дойдёт только разрешённое количество
     limit_clause = f"LIMIT {int(row_limit)}" if row_limit else ""
 
     return f"""
-WITH base AS (
+WITH raw AS (
     SELECT DISTINCT
         taxpayer_iin_bin,
         benefeciary_iin_bin,
@@ -120,6 +173,21 @@ WITH base AS (
         dop_info
     FROM (
 {union_sql}
+    )
+    {prefilter}
+),
+base AS (
+    SELECT * FROM (
+        SELECT
+            r.taxpayer_iin_bin AS taxpayer_iin_bin,
+            {resolved_expr} AS benefeciary_iin_bin,
+            r.status AS status,
+            r.algorithm_code AS algorithm_code,
+            r.priority AS priority,
+            r.`_actual_date` AS _actual_date,
+            r.dop_info AS dop_info
+        FROM raw AS r
+        {owner_join}
     )
     {base_where}
 ),
@@ -176,11 +244,15 @@ documents AS (
     WHERE d.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
     GROUP BY d.taxpayer_iin_bin
 ),
+-- Доля участия берётся по колонке taxpayer_iin_bin таблицы долей: в ней
+-- лежит идентификатор самого владельца, а не компании. Так же соединяет
+-- итоговая таблица AFM_6_1_99 (a11 по t.benefeciary_iin_bin).
 shares AS (
-    SELECT s.benefeciary_iin_bin AS benefeciary_iin_bin, any(s.share_percentage) AS share_percentage
+    SELECT s.taxpayer_iin_bin AS holder_iin_bin, any(s.share_percentage) AS share_percentage
     FROM {settings.DICT_SHARES} AS s
-    WHERE s.benefeciary_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
-    GROUP BY s.benefeciary_iin_bin
+    WHERE s.taxpayer_iin_bin != ''
+      AND s.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    GROUP BY s.taxpayer_iin_bin
 ),
 -- Имя бенефициара определяется на уровне строки: правило подстановки
 -- из dop_info зависит от кода алгоритма
@@ -221,7 +293,34 @@ SELECT
     COALESCE(comp.company_name, '') AS taxpayer_name,
     pr.benefeciary_iin_bin AS benefeciary_iin_bin,
     pr.benefeciary_name AS benefeciary_name,
-    pr.status AS status,
+    -- Признак нерезидента уточняется на уровне реестра, как в AFM_6_1_99.
+    -- Алгоритм ставит статус по своему полю ИИН, но у части источников
+    -- в этом поле лежит не ИИН, а иностранный идентификатор, и гражданство
+    -- видно только из dop_info. Тип БС (регистрационный либо предполагаемый)
+    -- при этом сохраняется — меняется лишь пометка о резидентстве.
+    CASE
+        WHEN match(pr.benefeciary_iin_bin, '^[0-9]{{12}}$')
+            THEN if(right(left(pr.benefeciary_iin_bin,5),1) = '5'
+                    OR (right(left(pr.benefeciary_iin_bin,5),1) IN ('1','2','3')
+                        AND right(left(pr.benefeciary_iin_bin,7),1) = '0'),
+                    if(pr.status LIKE '%Регистрационный%',
+                        'Регистрационный БС - нерезидент',
+                        'Предполагаемый БС - нерезидент'),
+                    pr.status)
+        WHEN lowerUTF8(pr.dop_info) LIKE '%нерезидент%'
+            THEN if(pr.status LIKE '%Регистрационный%',
+                    'Регистрационный БС - нерезидент',
+                    'Предполагаемый БС - нерезидент')
+        WHEN (lowerUTF8(pr.dop_info) LIKE '%гражданство%'
+              OR lowerUTF8(pr.dop_info) LIKE '%страна%')
+             AND lowerUTF8(pr.dop_info) NOT LIKE '%казахстан%'
+             AND lowerUTF8(pr.dop_info) NOT LIKE '%казахск%'
+             AND lowerUTF8(pr.dop_info) NOT LIKE '%kz%'
+            THEN if(pr.status LIKE '%Регистрационный%',
+                    'Регистрационный БС - нерезидент',
+                    'Предполагаемый БС - нерезидент')
+        ELSE pr.status
+    END AS status,
     pr.algorithm_codes AS algorithm_codes,
     arrayStringConcat(pr.algorithm_codes, ', ') AS algorithms,
     pr.min_priority AS priority,
@@ -241,7 +340,7 @@ LEFT JOIN ball2_t b2 ON pr.taxpayer_iin_bin = b2.taxpayer_iin_bin
 LEFT JOIN companies comp ON pr.taxpayer_iin_bin = comp.taxpayer_iin_bin
 LEFT JOIN ownership own ON pr.taxpayer_iin_bin = own.taxpayer_iin_bin
 LEFT JOIN documents doc ON pr.benefeciary_iin_bin = doc.taxpayer_iin_bin
-LEFT JOIN shares sh ON pr.benefeciary_iin_bin = sh.benefeciary_iin_bin
+LEFT JOIN shares sh ON pr.benefeciary_iin_bin = sh.holder_iin_bin
 -- Фильтр из ТЗ: исключаются строки, где пуст и ИИН, и имя бенефициара
 WHERE NOT (pr.benefeciary_iin_bin = '' AND pr.benefeciary_name = '')
 {having}

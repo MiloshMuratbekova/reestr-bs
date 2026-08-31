@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { errorMessage, listingApi } from '../api/client.js'
+import { ALGORITHM_OPTIONS, ALGORITHM_TITLES } from '../algorithms.js'
 import {
   AlgorithmChips,
   EmptyState,
@@ -18,10 +19,6 @@ import {
 
 const PAGE_SIZE = 50
 
-const ALGORITHM_OPTIONS = [
-  'БС-1', 'БС-2', 'БС-3', 'БС-4', 'БС-6', 'БС-7', 'БС-8',
-  'БС-9', 'БС-10', 'БС-11', 'БС-13', 'БС-16', 'БС-17', 'БС-22',
-]
 
 /** Боковая панель с профилем бенефициара и всеми его компаниями. */
 function ProfilePanel({ iin, onClose }) {
@@ -279,7 +276,7 @@ export default function BeneficiariesPage() {
               <option value="">Любой</option>
               {ALGORITHM_OPTIONS.map((code) => (
                 <option key={code} value={code}>
-                  {code}
+                  {code} — {ALGORITHM_TITLES[code]}
                 </option>
               ))}
             </select>

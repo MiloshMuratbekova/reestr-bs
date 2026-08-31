@@ -330,6 +330,10 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
     if not tables:
         return {"benefeciary_iin_bin": iin, "benefeciary_name": "", "companies": []}
 
+    # Здесь отбор идёт по бенефициару, поэтому подстановка ЮЛ→ФЛ не
+    # применяется: она меняет как раз то поле, по которому фильтруем, и
+    # запрос пришлось бы разворачивать по всему реестру. Профиль строится
+    # по тому идентификатору, который выдали алгоритмы.
     sql = build_registry_sql(
         tables,
         company_filter="benefeciary_iin_bin = {iin:String}",

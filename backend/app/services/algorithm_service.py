@@ -12,7 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.algorithms.definitions import ALGORITHMS, ALGORITHMS_BY_CODE
+from app.algorithms.definitions import (
+    ALGORITHMS,
+    ALGORITHMS_BY_CODE,
+    RESULT_TABLES,
+    UL_RESOLUTION_ORDER,
+)
+from app.algorithms.ul_resolution import UL_RESOLUTION_TABLE, build_ul_resolution_sql
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError, clickhouse, heavy_settings
@@ -30,47 +36,97 @@ class AlgorithmNotFound(Exception):
 # Загрузка начальных данных
 # ---------------------------------------------------------------------------
 async def seed_algorithms(session: AsyncSession) -> int:
-    """Заполняет bs_algorithms начальными данными из каталога.
+    """Приводит bs_algorithms в соответствие каталогу.
 
-    Уже существующие записи не трогаются — правки администратора сохраняются.
+    Новые алгоритмы добавляются. Существующие ОБНОВЛЯЮТСЯ, но только если
+    администратор не правил их через интерфейс, то есть version = 1.
+
+    Почему обновление вообще нужно. Коды алгоритмов переиспользуются: БС-2
+    когда-то был МФЦА, потом руководителями, снова МФЦА; у БС-6 менялся балл,
+    у БС-8 — пороги. Если оставлять существующие записи нетронутыми, на
+    сервере с уже заполненной базой навсегда осталась бы прежняя редакция,
+    а обновление приложения не давало бы никакого эффекта — и понять это
+    по журналу было бы нельзя.
+
+    Правки администратора при этом не теряются: как только SQL изменён через
+    интерфейс, version становится больше единицы, и такая запись пропускается
+    с предупреждением в журнале.
 
     Приложение запускается несколькими воркерами uvicorn, и заполнение
-    выполняется в каждом из них одновременно. Поэтому нарушение уникальности
-    по коду алгоритма — не ошибка, а признак того, что другой воркер успел
-    раньше: такая ситуация просто пропускается.
+    выполняется в каждом из них одновременно. Нарушение уникальности по коду —
+    не ошибка, а признак того, что другой воркер успел раньше.
     """
-    existing = set(
-        (await session.execute(select(BsAlgorithm.code))).scalars().all()
-    )
+    existing = {
+        row.code: row
+        for row in (await session.execute(select(BsAlgorithm))).scalars().all()
+    }
     created = 0
+    updated = 0
+    kept: List[str] = []
 
     for definition in ALGORITHMS:
-        if definition.code in existing:
-            continue
         try:
             sql_script = definition.load_sql()
         except OSError as exc:
             logger.error("Не удалось прочитать SQL алгоритма %s: %s", definition.code, exc)
             continue
 
-        session.add(
-            BsAlgorithm(
-                code=definition.code,
-                name=definition.name,
-                description=definition.description,
-                sql_script=sql_script,
-                clickhouse_result_table=definition.result_table,
-                source=definition.source,
-                priority_score=definition.priority_score,
-                is_active=True,
-                version=1,
-                depends_on=",".join(definition.depends_on),
-                order_index=definition.order_index,
-            )
-        )
-        created += 1
+        current = existing.get(definition.code)
 
-    if not created:
+        if current is None:
+            session.add(
+                BsAlgorithm(
+                    code=definition.code,
+                    name=definition.name,
+                    description=definition.description,
+                    sql_script=sql_script,
+                    clickhouse_result_table=definition.result_table,
+                    source=definition.source,
+                    priority_score=definition.priority_score,
+                    is_active=definition.is_active,
+                    version=1,
+                    depends_on=",".join(definition.depends_on),
+                    order_index=definition.order_index,
+                )
+            )
+            created += 1
+            continue
+
+        if current.version != 1:
+            # SQL правили через интерфейс — перезаписывать нельзя
+            if current.sql_script.strip() != sql_script.strip():
+                kept.append(definition.code)
+            continue
+
+        changed = (
+            current.sql_script.strip() != sql_script.strip()
+            or current.name != definition.name
+            or current.description != definition.description
+            or current.clickhouse_result_table != definition.result_table
+            or current.source != definition.source
+            or current.priority_score != definition.priority_score
+            or current.depends_on != ",".join(definition.depends_on)
+            or current.order_index != definition.order_index
+        )
+        if not changed:
+            continue
+
+        current.name = definition.name
+        current.description = definition.description
+        current.sql_script = sql_script
+        current.clickhouse_result_table = definition.result_table
+        current.source = definition.source
+        current.priority_score = definition.priority_score
+        current.depends_on = ",".join(definition.depends_on)
+        current.order_index = definition.order_index
+        updated += 1
+
+    if not created and not updated:
+        if kept:
+            logger.info(
+                "Каталог алгоритмов актуален; сохранены правки администратора: %s",
+                ", ".join(kept),
+            )
         return 0
 
     try:
@@ -80,8 +136,18 @@ async def seed_algorithms(session: AsyncSession) -> int:
         logger.info("Каталог алгоритмов заполнен другим процессом приложения")
         return 0
 
-    logger.info("В bs_algorithms добавлено алгоритмов: %d", created)
-    return created
+    if created:
+        logger.info("В bs_algorithms добавлено алгоритмов: %d", created)
+    if updated:
+        logger.info("Обновлено алгоритмов из каталога: %d", updated)
+    if kept:
+        logger.warning(
+            "Не обновлены — SQL правили через интерфейс: %s. "
+            "Чтобы вернуть редакцию из поставки, откатите алгоритм на первую "
+            "версию в истории изменений.",
+            ", ".join(kept),
+        )
+    return created + updated
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +193,67 @@ async def active_result_tables(session: AsyncSession) -> List[str]:
                 algorithm.code,
             )
     return tables
+
+
+async def resolution_map_if_ready() -> Optional[str]:
+    """Имя карты раскрытия ЮЛ, если она посчитана; иначе None.
+
+    Карта строится последним шагом пересчёта. Пока её нет — реестр работает
+    без подстановки: показать юрлицо-бенефициара честнее, чем отказать
+    в выдаче целиком.
+    """
+    database, table = UL_RESOLUTION_TABLE.split(".", 1)
+    try:
+        if await clickhouse.table_exists(database, table):
+            return UL_RESOLUTION_TABLE
+    except ClickHouseError as exc:
+        logger.warning("Не удалось проверить карту раскрытия ЮЛ: %s", exc)
+    return None
+
+
+async def build_resolution_map(session: AsyncSession) -> Optional[int]:
+    """Пересчитывает карту «юрлицо → конечный бенефициар-физлицо».
+
+    Выполняется после всех алгоритмов: карта строится по их результатам.
+    Возвращает число строк карты либо None, если строить было не из чего.
+    """
+    tables = resolution_tables_from(await active_result_tables(session))
+    statements = build_ul_resolution_sql(tables)
+    if not statements:
+        logger.info("Карта раскрытия ЮЛ не строится: нет рассчитанных таблиц")
+        return None
+
+    started = time.perf_counter()
+    for statement in statements:
+        await clickhouse.execute(statement, query_settings=heavy_settings())
+
+    database, table = UL_RESOLUTION_TABLE.split(".", 1)
+    rows = await clickhouse.table_row_count(database, table)
+    logger.info(
+        "Карта раскрытия ЮЛ построена за %d мс: юрлиц с найденным физлицом %d",
+        int((time.perf_counter() - started) * 1000),
+        rows,
+    )
+    return rows
+
+
+def resolution_tables_from(tables: Sequence[str]) -> List[str]:
+    """Таблицы для раскрытия ЮЛ-бенефициара до конечного физического лица.
+
+    Отдаются ВСЕ рассчитанные таблицы, упорядоченные по силе признака
+    (UL_RESOLUTION_ORDER): раскрыть промежуточное юрлицо годится любым
+    алгоритмом, а порядок задаёт, какой ответ предпочесть.
+
+    Берётся из уже полученного перечня рассчитанных таблиц, а не отдельным
+    запросом: проверка существования таблиц обходится в обращение к ClickHouse
+    на каждый алгоритм, и делать её дважды за запрос ни к чему.
+    """
+    available = set(tables)
+    return [
+        RESULT_TABLES[code]
+        for code in UL_RESOLUTION_ORDER
+        if RESULT_TABLES.get(code) in available
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +426,17 @@ async def recalculate_all(
         except ClickHouseError as exc:
             failed.add(algorithm.code)
             results.append({"code": algorithm.code, "status": "failed", "error": str(exc)[:2000]})
+
+    # Последний шаг: карта раскрытия юрлиц до конечных физических лиц.
+    # Строится по результатам всех алгоритмов, поэтому только здесь.
+    # Её сбой не отменяет пересчёт: реестр умеет работать и без карты.
+    try:
+        await build_resolution_map(session)
+    except ClickHouseError as exc:
+        logger.error("Карта раскрытия ЮЛ не построена: %s", exc)
+        results.append(
+            {"code": "карта раскрытия ЮЛ", "status": "failed", "error": str(exc)[:2000]}
+        )
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     succeeded = [r for r in results if r.get("status") == "success"]

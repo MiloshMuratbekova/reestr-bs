@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { errorMessage, registryApi } from '../api/client.js'
+import { ALGORITHM_OPTIONS, ALGORITHM_TITLES } from '../algorithms.js'
 import {
   EmptyState,
   ErrorMessage,
@@ -10,22 +11,6 @@ import {
   value,
 } from '../components/ui.jsx'
 
-const ALGORITHM_OPTIONS = [
-  'БС-1',
-  'БС-2',
-  'БС-3',
-  'БС-4',
-  'БС-6',
-  'БС-7',
-  'БС-8',
-  'БС-9',
-  'БС-10',
-  'БС-11',
-  'БС-13',
-  'БС-16',
-  'БС-17',
-  'БС-22',
-]
 
 function StatTile({ label, count }) {
   return (
@@ -242,7 +227,7 @@ export default function SearchPage() {
               <option value="">Любой</option>
               {ALGORITHM_OPTIONS.map((code) => (
                 <option key={code} value={code}>
-                  {code}
+                  {code} — {ALGORITHM_TITLES[code]}
                 </option>
               ))}
             </select>
