@@ -124,7 +124,7 @@ ADMIN_PASSWORD_RESET=true
   буква в букву:
 
 ```bash
-curl http://192.168.97.8:11434/api/tags
+curl http://192.168.97.9:11434/api/tags
 ```
 
 ---
@@ -153,7 +153,7 @@ curl -s http://localhost:8020/api/health
 
 ```
 Интерфейс раздаётся из /app/frontend/dist
-ИИ Qwen:    http://192.168.97.8:11434 (qwen3.5-122b)
+ИИ Qwen:    http://192.168.97.9:11434 (qwen3.5-122b)
 Схема PostgreSQL проверена/создана
 Создан администратор по умолчанию: admin
 В bs_algorithms добавлено алгоритмов: 14
@@ -264,7 +264,7 @@ ClickHouse или Ollama. Проверьте с сервера:
 
 ```bash
 curl http://192.168.122.45:8123/ping
-curl http://192.168.97.8:11434/api/tags
+curl http://192.168.97.9:11434/api/tags
 ```
 
 **Поменяли адрес в `.env`, перезапустили — приложение ходит по-старому.**

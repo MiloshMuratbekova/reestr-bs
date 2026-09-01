@@ -39,6 +39,13 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
     Типы приводятся к общему виду: _actual_date в таблицах алгоритмов
     встречается и строкой, и датой; priority — целым разной ширины.
 
+    Каждое поле оборачивается в ifNull. Колонки таблиц алгоритмов на боевом
+    сервере объявлены Nullable, а toString от Nullable возвращает Nullable —
+    и дальше splitByChar по dop_info даёт Nullable(Array(String)), который
+    ClickHouse запрещает: «Nested type Array(String) cannot be inside Nullable
+    type». Снимая Nullable здесь, у самого источника, мы избавляем от него
+    весь остальной запрос разом.
+
     Колонки обязательно квалифицируются псевдонимом таблицы (``src.``).
     Без него запись вида ``toString(taxpayer_iin_bin) AS taxpayer_iin_bin``
     в ClickHouse 24+ (новый анализатор, включён по умолчанию) разбирается
@@ -55,13 +62,13 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
     for table in tables:
         parts.append(
             f"""    SELECT
-        toString(src.taxpayer_iin_bin) AS taxpayer_iin_bin,
-        toString(src.benefeciary_iin_bin) AS benefeciary_iin_bin,
-        toString(src.status) AS status,
-        toString(src.algorithm_code) AS algorithm_code,
-        toInt32(src.priority) AS priority,
-        toString(src.`_actual_date`) AS _actual_date,
-        toString(src.dop_info) AS dop_info
+        ifNull(toString(src.taxpayer_iin_bin), '') AS taxpayer_iin_bin,
+        ifNull(toString(src.benefeciary_iin_bin), '') AS benefeciary_iin_bin,
+        ifNull(toString(src.status), '') AS status,
+        ifNull(toString(src.algorithm_code), '') AS algorithm_code,
+        ifNull(toInt32OrZero(toString(src.priority)), 0) AS priority,
+        ifNull(toString(src.`_actual_date`), '') AS _actual_date,
+        ifNull(toString(src.dop_info), '') AS dop_info
     FROM {table} AS src"""
         )
     return "\n    UNION ALL\n".join(parts)
@@ -214,7 +221,7 @@ ball2_t AS (
 -- Справочники сворачиваются до одной строки на идентификатор,
 -- иначе LEFT JOIN размножит строки реестра
 persons AS (
-    SELECT p.taxpayer_iin_bin AS taxpayer_iin_bin, any(p.taxpayer_name) AS person_name
+    SELECT p.taxpayer_iin_bin AS taxpayer_iin_bin, ifNull(any(p.taxpayer_name), '') AS person_name
     FROM {settings.DICT_PERSONS} AS p
     WHERE p.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
     GROUP BY p.taxpayer_iin_bin

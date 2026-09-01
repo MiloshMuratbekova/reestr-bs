@@ -108,7 +108,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8020
 
 ```
 Интерфейс раздаётся из /opt/reestr_bs/frontend/dist
-ИИ Qwen:    http://192.168.97.8:11434 (qwen3.5-122b)
+ИИ Qwen:    http://192.168.97.9:11434 (qwen3.5-122b)
 ClickHouse доступен, версия ...
 Поле category берётся из ...
 ```
@@ -168,7 +168,7 @@ sudo ufw allow 8020/tcp
 Проверить имя модели на сервере ИИ:
 
 ```bash
-curl http://192.168.97.8:11434/api/tags
+curl http://192.168.97.9:11434/api/tags
 ```
 
 Значение `OLLAMA_MODEL` в `.env` должно совпадать с именем из этого ответа

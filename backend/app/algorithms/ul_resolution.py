@@ -50,11 +50,12 @@ def _edges_union(tables: List[str]) -> str:
     for rank, table in enumerate(tables, start=1):
         parts.append(
             f"""    SELECT
-        o.taxpayer_iin_bin AS ul,
-        o.benefeciary_iin_bin AS child,
+        ifNull(toString(o.taxpayer_iin_bin), '') AS ul,
+        ifNull(toString(o.benefeciary_iin_bin), '') AS child,
         {rank} AS rank
     FROM {table} AS o
-    WHERE o.taxpayer_iin_bin != '' AND o.benefeciary_iin_bin != ''"""
+    WHERE ifNull(toString(o.taxpayer_iin_bin), '') != ''
+      AND ifNull(toString(o.benefeciary_iin_bin), '') != ''"""
         )
     return "\n    UNION ALL\n".join(parts)
 

@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
 
     # ---------------- Ollama / Qwen ----------------
-    OLLAMA_BASE_URL: str = "http://192.168.97.8:11434"
+    OLLAMA_BASE_URL: str = "http://192.168.97.9:11434"
     #: Имя модели ровно как оно зарегистрировано в Ollama — через дефис
     OLLAMA_MODEL: str = "qwen3.5-122b"
     #: Тип API сервера ИИ: «ollama» (нативный) либо «openai» (OpenAI-совместимый)
