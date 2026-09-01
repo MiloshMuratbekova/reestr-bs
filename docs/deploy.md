@@ -94,7 +94,7 @@ cp .env.example .env
 | `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | учётные данные ClickHouse |
 
 Уже проставлены и менять не нужно: `PORT=8020`,
-`OLLAMA_MODEL=qwen3.5-122b`, `FRONTEND_DIST=../frontend/dist`.
+`OLLAMA_MODEL=doai-vision2:latest`, `FRONTEND_DIST=../frontend/dist`.
 
 Оставьте `DATABASE_URL` пустым — иначе вместо PostgreSQL будет использован SQLite.
 
@@ -108,7 +108,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8020
 
 ```
 Интерфейс раздаётся из /opt/reestr_bs/frontend/dist
-ИИ Qwen:    http://192.168.97.9:11434 (qwen3.5-122b)
+ИИ Qwen:    http://192.168.97.9:11434 (doai-vision2:latest)
 ClickHouse доступен, версия ...
 Поле category берётся из ...
 ```
@@ -172,7 +172,7 @@ curl http://192.168.97.9:11434/api/tags
 ```
 
 Значение `OLLAMA_MODEL` в `.env` должно совпадать с именем из этого ответа
-буква в букву — `qwen3.5-122b`.
+буква в букву — `doai-vision2:latest`.
 
 ---
 

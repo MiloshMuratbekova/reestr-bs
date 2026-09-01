@@ -157,7 +157,7 @@ docker compose logs -f app
 
 ```
 Интерфейс раздаётся из /app/frontend/dist
-ИИ Qwen:    http://192.168.97.9:11434 (qwen3.5-122b)
+ИИ Qwen:    http://192.168.97.9:11434 (doai-vision2:latest)
 Схема PostgreSQL проверена/создана
 Создан администратор по умолчанию: admin
 В bs_algorithms добавлено алгоритмов: 14
