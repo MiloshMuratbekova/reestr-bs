@@ -124,6 +124,17 @@ foreach ($file in @("docker-compose.yml", "docker-compose.v2.yml")) {
     }
 }
 
+# README попадает на сервер как единственная инструкция, и версия в нём
+# указана явно. Без подстановки шаг «docker load» обещает не тот тег, что
+# реально в образе, — расхождение всплывает уже в закрытом контуре.
+$readmePath = Join-Path $Stage "README-DEPLOY.md"
+$readmeText = Read-PlainUtf8 $readmePath
+$readmeText = $readmeText -replace 'reestr-bs:[0-9][0-9.]*', $AppImage
+Write-PlainUtf8 $readmePath $readmeText
+if (-not (Select-String -Path $readmePath -Pattern ([regex]::Escape($AppImage)) -Quiet)) {
+    throw "В README-DEPLOY.md не проставился образ $AppImage"
+}
+
 # --- 6. Бандл ---------------------------------------------------------------
 Write-Host "==> Упаковка $Bundle" -ForegroundColor Cyan
 tar -cf "$Root\$Bundle" -C $Stage .
