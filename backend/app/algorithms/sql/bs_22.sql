@@ -1,6 +1,6 @@
 -- ============================================================================
 -- БС-22 — КГД нерезиденты (Регистрационный БС, балл не присваивается)
--- Источник: AFM_2_1.AFM_2_1_kgd_nonresident — налоговое заявление
+-- Источник: AFM_2_1_TEST.AFM_2_1_kgd_nonresident — налоговое заявление
 -- о регистрации ЮЛ-нерезидента.
 -- Результат: AFM_6_TEST.AFM_6_1_28
 -- ============================================================================
@@ -24,7 +24,7 @@ SELECT * FROM (
             if(COALESCE(k.benefeciary_foreign_id,'') != '', concat(', ИД в стране: ',k.benefeciary_foreign_id),''),
             if(COALESCE(k.benefeciary_citizenship,'') != '', concat(', гражданство: ',k.benefeciary_citizenship),''),
             if(COALESCE(k.share_percentage,'') != '', concat(', доля: ',k.share_percentage,'%'),'')) AS dop_info
-    FROM AFM_2_1.AFM_2_1_kgd_nonresident k
+    FROM AFM_2_1_TEST.AFM_2_1_kgd_nonresident k
     LEFT JOIN (SELECT taxpayer_iin_bin, founder_iin_bin, share_percentage FROM AFM_2_1_TEST.AFM_2_1_5_1
                WHERE _actual_date=(SELECT max(_actual_date) FROM AFM_2_1_TEST.AFM_2_1_5_1)) b ON k.taxpayer_iin_bin=b.taxpayer_iin_bin
     LEFT JOIN (SELECT taxpayer_iin_bin, employee_iin_bin FROM AFM_2_1_TEST.AFM_2_1_6_1

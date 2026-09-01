@@ -107,6 +107,7 @@ async def seed_algorithms(session: AsyncSession) -> int:
             or current.priority_score != definition.priority_score
             or current.depends_on != ",".join(definition.depends_on)
             or current.order_index != definition.order_index
+            or current.is_active != definition.is_active
         )
         if not changed:
             continue
@@ -119,6 +120,10 @@ async def seed_algorithms(session: AsyncSession) -> int:
         current.priority_score = definition.priority_score
         current.depends_on = ",".join(definition.depends_on)
         current.order_index = definition.order_index
+        # Признак участия в расчёте тоже приводится к каталогу: иначе
+        # алгоритм, однажды заведённый отключённым, таким и остался бы
+        # на сервере навсегда, сколько бы обновлений ни ставили
+        current.is_active = definition.is_active
         updated += 1
 
     if not created and not updated:
