@@ -12,6 +12,7 @@ import {
   number,
   value,
 } from '../components/ui.jsx'
+import { useReadonly } from '../hooks/useReadonly.js'
 
 const STATUS_LABELS = {
   running: { text: 'Выполняется', className: 'bg-afm-100 text-afm-800' },
@@ -31,6 +32,7 @@ function duration(ms) {
 }
 
 export default function SchedulePage() {
+  const readonly = useReadonly()
   const [schedule, setSchedule] = useState(null)
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
@@ -144,15 +146,17 @@ export default function SchedulePage() {
               {saving && <Spinner className="h-4 w-4" />}
               Сохранить
             </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={runNow}
-              disabled={running}
-            >
-              {running && <Spinner className="h-4 w-4" />}
-              {running ? 'Пересчёт идёт…' : 'Запустить сейчас'}
-            </button>
+            {!readonly && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={runNow}
+                disabled={running}
+              >
+                {running && <Spinner className="h-4 w-4" />}
+                {running ? 'Пересчёт идёт…' : 'Запустить сейчас'}
+              </button>
+            )}
           </div>
         </div>
 

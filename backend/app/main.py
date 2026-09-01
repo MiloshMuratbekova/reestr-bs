@@ -127,15 +127,27 @@ async def lifespan(app: FastAPI):
     # Планировщик ночного пересчёта. Задача поднимается в каждом воркере,
     # но право на запуск разыгрывается через строку расписания в PostgreSQL,
     # поэтому пересчёт стартует ровно один раз.
-    scheduler = asyncio.create_task(schedule_service.scheduler_loop())
+    #
+    # В режиме чтения планировщик не нужен: пересчёт создавал бы таблицы
+    # в ведомственной базе, а прав на это у системы нет. Таблицы результатов
+    # ведёт организация, система их только читает.
+    scheduler = None
+    if settings.CLICKHOUSE_READONLY:
+        logger.info(
+            "Режим чтения: планировщик пересчёта не запускается, "
+            "таблицы результатов ведёт организация"
+        )
+    else:
+        scheduler = asyncio.create_task(schedule_service.scheduler_loop())
 
     yield
 
-    scheduler.cancel()
-    try:
-        await scheduler
-    except asyncio.CancelledError:
-        pass
+    if scheduler is not None:
+        scheduler.cancel()
+        try:
+            await scheduler
+        except asyncio.CancelledError:
+            pass
 
     await clickhouse.close()
     await ollama.close()

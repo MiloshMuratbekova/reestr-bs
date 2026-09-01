@@ -18,7 +18,11 @@ from app.algorithms.definitions import (
     RESULT_TABLES,
     UL_RESOLUTION_ORDER,
 )
-from app.algorithms.ul_resolution import UL_RESOLUTION_TABLE, build_ul_resolution_sql
+from app.algorithms.ul_resolution import (
+    UL_RESOLUTION_TABLE,
+    build_ul_map_subquery,
+    build_ul_resolution_sql,
+)
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError, clickhouse, heavy_settings
@@ -30,6 +34,26 @@ logger = get_logger("app.algorithms.service")
 
 class AlgorithmNotFound(Exception):
     pass
+
+
+class ReadOnlyMode(Exception):
+    """Действие меняет ведомственную базу, а система работает на чтение."""
+
+
+def assert_writable(action: str) -> None:
+    """Отклоняет всё, что создаёт или перезаписывает таблицы в ClickHouse.
+
+    Учётная запись системы имеет права только на чтение: таблицы результатов
+    алгоритмов ведёт сама организация. Проверка стоит здесь, а не только
+    в интерфейсе, потому что тот же путь доступен через API.
+    """
+    if settings.CLICKHOUSE_READONLY:
+        raise ReadOnlyMode(
+            f"{action} недоступно: система подключена к ClickHouse только на "
+            "чтение и не создаёт таблиц в ведомственной базе. Таблицы "
+            "результатов алгоритмов ведёт организация, система читает готовые. "
+            "SQL алгоритмов остаётся в интерфейсе как описание критериев отбора."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -200,12 +224,44 @@ async def active_result_tables(session: AsyncSession) -> List[str]:
     return tables
 
 
-async def resolution_map_if_ready() -> Optional[str]:
-    """Имя карты раскрытия ЮЛ, если она посчитана; иначе None.
+#: Умеет ли сервер WITH RECURSIVE. Проверяется один раз за процесс.
+_recursive_cte: Optional[bool] = None
 
-    Карта строится последним шагом пересчёта. Пока её нет — реестр работает
-    без подстановки: показать юрлицо-бенефициара честнее, чем отказать
-    в выдаче целиком.
+
+async def supports_recursive_cte() -> bool:
+    """Поддерживает ли ClickHouse рекурсивные CTE (версия 24.4 и новее)."""
+    global _recursive_cte
+    if _recursive_cte is None:
+        try:
+            await clickhouse.fetch_value(
+                "WITH RECURSIVE t AS ("
+                " SELECT 1 AS n UNION ALL SELECT n + 1 FROM t WHERE n < 3"
+                ") SELECT count() FROM t"
+            )
+            _recursive_cte = True
+        except ClickHouseError as exc:
+            logger.warning(
+                "Сервер не поддерживает WITH RECURSIVE, юрлица не будут "
+                "раскрываться до физлиц: %s",
+                exc,
+            )
+            _recursive_cte = False
+    return _recursive_cte
+
+
+async def resolution_map_if_ready(
+    tables: Optional[Sequence[str]] = None,
+) -> Optional[str]:
+    """Карта раскрытия ЮЛ для подстановки в реестр, либо None.
+
+    Сначала ищется готовая таблица: она строится последним шагом пересчёта,
+    и join к ней самый дешёвый. Если таблицы нет — а в режиме чтения её и
+    не может быть, создавать мы не вправе, — карта отдаётся подзапросом
+    с рекурсивным обходом. Он планируется на несколько секунд дольше,
+    но даёт тот же результат и не требует прав на запись.
+
+    Совсем без карты реестр тоже работает, просто без подстановки: показать
+    юрлицо-бенефициара честнее, чем отказать в выдаче целиком.
     """
     database, table = UL_RESOLUTION_TABLE.split(".", 1)
     try:
@@ -213,6 +269,9 @@ async def resolution_map_if_ready() -> Optional[str]:
             return UL_RESOLUTION_TABLE
     except ClickHouseError as exc:
         logger.warning("Не удалось проверить карту раскрытия ЮЛ: %s", exc)
+
+    if tables and await supports_recursive_cte():
+        return build_ul_map_subquery(resolution_tables_from(tables)) or None
     return None
 
 
@@ -222,6 +281,8 @@ async def build_resolution_map(session: AsyncSession) -> Optional[int]:
     Выполняется после всех алгоритмов: карта строится по их результатам.
     Возвращает число строк карты либо None, если строить было не из чего.
     """
+    assert_writable("Построение карты раскрытия юрлиц")
+
     tables = resolution_tables_from(await active_result_tables(session))
     statements = build_ul_resolution_sql(tables)
     if not statements:
@@ -279,6 +340,8 @@ async def run_algorithm(
     Скрипт может состоять из нескольких операторов — они выполняются
     последовательно. Возвращает количество строк в таблице результата.
     """
+    assert_writable("Запуск алгоритма")
+
     algorithm = await get_algorithm(session, code)
     await ensure_registry_database()
 
@@ -395,6 +458,8 @@ async def recalculate_all(
     зависящие от упавшего, пропускаются, иначе они посчитаются по устаревшим
     или отсутствующим данным.
     """
+    assert_writable("Пересчёт реестра")
+
     algorithms = await list_algorithms(session, only_active=True)
     ordered = order_by_dependencies(algorithms)
 

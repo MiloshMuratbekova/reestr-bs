@@ -41,13 +41,27 @@ class Settings(BaseSettings):
     # ---------------- ClickHouse ----------------
     CLICKHOUSE_HOST: str = "192.168.122.45"
     CLICKHOUSE_PORT: int = 8123
-    CLICKHOUSE_USER: str = "default"
+    #: Учётная запись ClickHouse. Только чтение: система не создаёт и не
+    #: изменяет таблицы в ведомственной базе, она их читает.
+    CLICKHOUSE_USER: str = "ai_doa"
+    #: Пароль в репозиторий не кладётся. Задаётся на сервере — в .env либо
+    #: через Настройки в интерфейсе (хранится в томе, вне git).
     CLICKHOUSE_PASSWORD: str = ""
     CLICKHOUSE_DATABASE: str = "AFM_6_TEST"
     CLICKHOUSE_TIMEOUT: int = 1800
     CLICKHOUSE_MAX_EXECUTION_TIME: int = 1800
     CLICKHOUSE_MAX_MEMORY_USAGE: int = 32_000_000_000
     CLICKHOUSE_VERIFY_SSL: bool = False
+
+    #: Работать только на чтение. Таблицы результатов алгоритмов ведёт
+    #: сама организация, система их не создаёт и не перезаписывает —
+    #: она читает готовые и собирает из них реестр.
+    #:
+    #: Пока включено, недоступны запуск алгоритмов, полный пересчёт
+    #: и ночное расписание: все три выполняли CREATE TABLE.
+    #: Логика алгоритмов при этом никуда не делась — их SQL остаётся
+    #: в интерфейсе как описание критериев отбора.
+    CLICKHOUSE_READONLY: bool = True
 
     # ---------------- PostgreSQL ----------------
     POSTGRES_HOST: str = "127.0.0.1"

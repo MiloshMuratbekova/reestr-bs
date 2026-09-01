@@ -114,6 +114,8 @@ async def rollback_algorithm(
 async def run_algorithm(code: str, session: SessionDep, user: AdminUser):
     try:
         result = await algorithm_service.run_algorithm(session, code, triggered_by=user.username)
+    except algorithm_service.ReadOnlyMode as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except algorithm_service.AlgorithmNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ClickHouseError as exc:
@@ -167,7 +169,10 @@ async def recalculate(session: SessionDep, user: AdminUser):
         )
 
     logger.info("Пересчёт реестра запущен пользователем %s", user.username)
-    result = await schedule_service.run_recalculation(
-        trigger="manual", triggered_by=user.username, session=session
-    )
+    try:
+        result = await schedule_service.run_recalculation(
+            trigger="manual", triggered_by=user.username, session=session
+        )
+    except algorithm_service.ReadOnlyMode as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return RecalculateResponse(**result)

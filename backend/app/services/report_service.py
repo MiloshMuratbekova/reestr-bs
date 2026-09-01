@@ -198,7 +198,7 @@ async def _fetch_rows(
         category_source=registry_service.category_source(),
         extra_conditions=extra or None,
         row_limit=limit,
-        resolution_map=await algorithm_service.resolution_map_if_ready(),
+        resolution_map=await algorithm_service.resolution_map_if_ready(tables),
     )
     return await clickhouse.fetch_all(sql)
 

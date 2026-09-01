@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
+from app.algorithms import cleaning
 from app.algorithms.registry_sql import (
     DOP_INFO_FIRST_PART_ALGORITHMS,
     build_union_sql,
@@ -56,29 +57,48 @@ def _scored_cte(result_tables: Iterable[str], *, with_details: bool) -> str:
     """
     union_sql = build_union_sql(result_tables)
 
-    if with_details:
-        base_columns = (
-            "        taxpayer_iin_bin,\n"
-            "        benefeciary_iin_bin,\n"
-            "        status,\n"
-            "        algorithm_code,\n"
-            "        priority,\n"
-            "        dop_info"
-        )
-    else:
-        base_columns = (
-            "        taxpayer_iin_bin,\n"
-            "        benefeciary_iin_bin,\n"
-            "        algorithm_code,\n"
-            "        priority"
-        )
+    first_part_codes = ", ".join(
+        f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS
+    )
+    iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    dop_name = cleaning.name_from_dop(
+        "u.dop_info", "u.algorithm_code", first_part_codes
+    )
+    key = cleaning.beneficiary_key("iin_clean", "dop_name")
 
-    return f"""base AS (
-    SELECT DISTINCT
-{base_columns}
+    details = ",\n        status,\n        dop_info" if with_details else ""
+    details_select = (
+        "        u.status AS status,\n        u.dop_info AS dop_info,\n"
+        if with_details
+        else ""
+    )
+
+    # Чистка стоит ДО расчёта баллов: ключом сведения служит очищенный ИИН,
+    # и если считать по грязному, проценты не сошлись бы с показанными
+    # строками. Те же правила применяет карточка компании — см. registry_sql.
+    return f"""cleaned AS (
+    SELECT
+        u.taxpayer_iin_bin AS taxpayer_iin_bin,
+        {iin_clean} AS iin_clean,
+        {dop_name} AS dop_name,
+        u.algorithm_code AS algorithm_code,
+        u.priority AS priority,
+{details_select}        u.benefeciary_iin_bin AS raw_iin
     FROM (
 {union_sql}
-    )
+    ) AS u
+),
+base AS (
+    SELECT DISTINCT
+        taxpayer_iin_bin,
+        iin_clean,
+        {key} AS benefeciary_iin_bin,
+        dop_name,
+        algorithm_code,
+        priority{details}
+    FROM cleaned
+    -- Ни ИИН, ни имени — опознать лицо нельзя, это не бенефициар
+    WHERE NOT (iin_clean = '' AND dop_name = '')
 ),
 -- Один балл на сочетание «пара + алгоритм»: внутри алгоритма priority
 -- постоянна, а строк на пару может быть много из-за JOIN с учредителями
@@ -280,7 +300,7 @@ def build_beneficiaries_list_sql(
     регистрационные сведения (priority 0) достовернее предполагаемых.
     """
     sort_column = BENEFICIARY_SORT_COLUMNS.get(sort, "max_ball3")
-    first_part_list = ", ".join(f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS)
+    nonresident_status_expr = cleaning.nonresident_status("pp.status")
     where_clause = ""
     if conditions:
         where_clause = "WHERE " + " AND ".join(conditions)
@@ -292,16 +312,17 @@ persons AS (
         p.taxpayer_iin_bin AS taxpayer_iin_bin,
         ifNull(toString(any(p.taxpayer_name)), '') AS person_name
     FROM {settings.DICT_PERSONS} AS p
-    WHERE p.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    WHERE p.taxpayer_iin_bin IN (SELECT iin_clean FROM base WHERE iin_clean != '')
     GROUP BY p.taxpayer_iin_bin
 ),
 per_pair AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
         b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        any(b.iin_clean) AS iin_clean,
         argMin(b.status, b.priority) AS status,
+        argMin(b.dop_name, b.priority) AS dop_name,
         argMin(b.dop_info, b.priority) AS dop_info,
-        argMin(b.algorithm_code, b.priority) AS lead_algorithm,
         groupUniqArray(b.algorithm_code) AS algorithm_codes,
         min(b.priority) AS min_priority
     FROM base AS b
@@ -311,17 +332,26 @@ pair_named AS (
     SELECT
         pp.taxpayer_iin_bin AS taxpayer_iin_bin,
         pp.benefeciary_iin_bin AS benefeciary_iin_bin,
-        pp.status AS status,
+        pp.iin_clean AS iin_clean,
+        -- Нет настоящего ИИН — лицо нерезидент. Тип БС сохраняется,
+        -- добавляется только пометка. Те же правила в карточке компании.
+        if(pp.iin_clean = '',
+            {nonresident_status_expr},
+            if(right(left(pp.iin_clean, 5), 1) = '5'
+                OR (right(left(pp.iin_clean, 5), 1) IN ('1', '2', '3')
+                    AND right(left(pp.iin_clean, 7), 1) = '0'),
+                {nonresident_status_expr},
+                pp.status)) AS status,
         pp.algorithm_codes AS algorithm_codes,
         pp.min_priority AS min_priority,
         COALESCE(sc.ball3, 0) AS ball3,
+        -- Справочник ФЛ ищется по настоящему ИИН; когда его нет, имя уже
+        -- разобрано из dop_info на шаге чистки
         if(COALESCE(pr.person_name, '') != '',
             pr.person_name,
-            if(pp.lead_algorithm IN ({first_part_list}),
-                trim(BOTH ' ' FROM splitByChar(',', pp.dop_info)[1]),
-                pp.dop_info)) AS benefeciary_name
+            pp.dop_name) AS benefeciary_name
     FROM per_pair AS pp
-    LEFT JOIN persons AS pr ON pp.benefeciary_iin_bin = pr.taxpayer_iin_bin
+    LEFT JOIN persons AS pr ON pp.iin_clean = pr.taxpayer_iin_bin
     LEFT JOIN scored AS sc
         ON pp.taxpayer_iin_bin = sc.taxpayer_iin_bin
         AND pp.benefeciary_iin_bin = sc.benefeciary_iin_bin
@@ -337,8 +367,6 @@ rolled AS (
         max(pn.status LIKE '%нерезидент%') AS is_nonresident,
         min(pn.min_priority) AS min_priority
     FROM pair_named AS pn
-    -- Фильтр из ТЗ: строки без ИИН и без имени в реестр не попадают
-    WHERE NOT (pn.benefeciary_iin_bin = '' AND pn.benefeciary_name = '')
     GROUP BY pn.benefeciary_iin_bin
 )
 SELECT

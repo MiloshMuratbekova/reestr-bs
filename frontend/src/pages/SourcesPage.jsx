@@ -12,6 +12,7 @@ import {
   number,
   value,
 } from '../components/ui.jsx'
+import { useReadonly } from '../hooks/useReadonly.js'
 
 function TableRow({ table }) {
   return (
@@ -107,6 +108,7 @@ function SourceCard({ source }) {
 
 /** Таблица алгоритмов для администратора: просмотр SQL и запуск. */
 function AlgorithmsPanel() {
+  const readonly = useReadonly()
   const [algorithms, setAlgorithms] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -204,14 +206,16 @@ function AlgorithmsPanel() {
                   >
                     SQL
                   </button>
-                  <button
-                    type="button"
-                    className="text-sm text-afm-600 hover:underline disabled:opacity-40"
-                    onClick={() => runAlgorithm(algorithm.code)}
-                    disabled={Boolean(running)}
-                  >
-                    {running === algorithm.code ? 'Расчёт…' : 'Запустить'}
-                  </button>
+                  {!readonly && (
+                    <button
+                      type="button"
+                      className="text-sm text-afm-600 hover:underline disabled:opacity-40"
+                      onClick={() => runAlgorithm(algorithm.code)}
+                      disabled={Boolean(running)}
+                    >
+                      {running === algorithm.code ? 'Расчёт…' : 'Запустить'}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

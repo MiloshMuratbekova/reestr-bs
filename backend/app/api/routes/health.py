@@ -37,6 +37,9 @@ async def health(session: SessionDep) -> dict:
     # сохранённые через интерфейс значения сильнее
     return {
         "status": "ok" if (clickhouse_ok and postgres_ok) else "degraded",
+        # Интерфейс по этому признаку прячет запуск алгоритмов и пересчёт:
+        # в режиме чтения они всё равно будут отклонены сервером
+        "readonly": settings.CLICKHOUSE_READONLY,
         "clickhouse": {
             "available": clickhouse_ok,
             "url": current_url(),

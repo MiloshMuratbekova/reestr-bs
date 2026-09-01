@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional
 
+from app.algorithms import cleaning
 from app.core.config import settings
 
 # Алгоритмы, у которых имя бенефициара при отсутствии в справочнике ФЛ
@@ -154,8 +155,23 @@ def build_registry_sql(
     if company_filter:
         base_conditions.append(f"({company_filter})")
     if resolution_map:
-        base_conditions.append("left(right(benefeciary_iin_bin, 8), 1) NOT IN ('4', '5')")
+        # Признак ЮЛ проверяется по настоящему ИИН, а не по ключу: у ключа
+        # вида «нерезидент: …» никакой структуры БИН нет, и правило пятого
+        # знака к нему неприменимо.
+        base_conditions.append(
+            "(iin_clean = '' OR left(right(iin_clean, 8), 1) NOT IN ('4', '5'))"
+        )
     base_where = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
+
+    # Выражения приведения данных в порядок — см. app.algorithms.cleaning
+    clean_iin_expr = cleaning.clean_iin("r.benefeciary_iin_bin")
+    if resolution_map:
+        clean_iin_expr = cleaning.clean_iin(f"({resolved_expr})")
+    quoted_expr = cleaning.quoted_name("c.dop_info")
+    first_part_expr = cleaning.first_part("c.dop_info")
+    key_expr = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
+    nonresident_status_expr = cleaning.nonresident_status("k.status")
+    persons_table = settings.DICT_PERSONS
 
     # Отбор по компании можно применить ещё до подстановки: замена меняет
     # бенефициара, но никогда не трогает taxpayer_iin_bin. Для карточки
@@ -183,18 +199,79 @@ WITH raw AS (
     )
     {prefilter}
 ),
+-- Приведение ИИН в порядок: заглушки 000000000, «-», «нет» и текст вместо
+-- номера обнуляются. Делается до всего остального, потому что дальше ИИН
+-- служит ключом сведения.
+cleaned AS (
+    SELECT
+        r.taxpayer_iin_bin AS taxpayer_iin_bin,
+        {clean_iin_expr} AS iin_clean,
+        r.status AS status,
+        r.algorithm_code AS algorithm_code,
+        r.priority AS priority,
+        r.`_actual_date` AS _actual_date,
+        r.dop_info AS dop_info
+    FROM raw AS r
+    {owner_join}
+),
+persons AS (
+    SELECT
+        p.taxpayer_iin_bin AS taxpayer_iin_bin,
+        ifNull(any(p.taxpayer_name), '') AS person_name
+    FROM {persons_table} AS p
+    WHERE p.taxpayer_iin_bin IN (SELECT iin_clean FROM cleaned WHERE iin_clean != '')
+    GROUP BY p.taxpayer_iin_bin
+),
+-- Имя, ключ и статус считаются здесь, ДО расчёта баллов. Иначе ball1 и ball2
+-- сложились бы по грязному ИИН, а в выдаче стоял бы чистый — и проценты
+-- перестали бы сходиться с показанными строками.
+keyed AS (
+    SELECT
+        c.taxpayer_iin_bin AS taxpayer_iin_bin,
+        c.iin_clean AS iin_clean,
+        c.status AS status,
+        c.algorithm_code AS algorithm_code,
+        c.priority AS priority,
+        c.`_actual_date` AS _actual_date,
+        c.dop_info AS dop_info,
+        -- Имя: справочник ФЛ, затем наименование из кавычек, затем правило
+        -- «до первой запятой» для алгоритмов, где dop_info начинается с ФИО
+        if(COALESCE(pr.person_name, '') != '',
+            pr.person_name,
+            if({quoted_expr} != '',
+                {quoted_expr},
+                if(c.algorithm_code IN ({first_part_list}),
+                    {first_part_expr},
+                    c.dop_info))) AS benefeciary_name
+    FROM cleaned AS c
+    LEFT JOIN persons AS pr ON c.iin_clean = pr.taxpayer_iin_bin
+),
 base AS (
     SELECT * FROM (
         SELECT
-            r.taxpayer_iin_bin AS taxpayer_iin_bin,
-            {resolved_expr} AS benefeciary_iin_bin,
-            r.status AS status,
-            r.algorithm_code AS algorithm_code,
-            r.priority AS priority,
-            r.`_actual_date` AS _actual_date,
-            r.dop_info AS dop_info
-        FROM raw AS r
-        {owner_join}
+            k.taxpayer_iin_bin AS taxpayer_iin_bin,
+            k.iin_clean AS iin_clean,
+            -- Ключ сведения: настоящий ИИН, а при его отсутствии — «нерезидент»
+            -- с именем. Одно только слово «нерезидент» склеило бы разных
+            -- иностранцев одной компании в одну строку.
+            {key_expr} AS benefeciary_iin_bin,
+            k.benefeciary_name AS benefeciary_name,
+            -- Нет настоящего ИИН — значит казахстанского номера у лица нет,
+            -- и это нерезидент. Тип БС при этом сохраняется.
+            if(k.iin_clean = '',
+                {nonresident_status_expr},
+                if(right(left(k.iin_clean, 5), 1) = '5'
+                    OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
+                        AND right(left(k.iin_clean, 7), 1) = '0'),
+                    {nonresident_status_expr},
+                    k.status)) AS status,
+            k.algorithm_code AS algorithm_code,
+            k.priority AS priority,
+            k.`_actual_date` AS _actual_date,
+            k.dop_info AS dop_info
+        FROM keyed AS k
+        -- Строки без ИИН и без имени опознать нельзя — они не бенефициары
+        WHERE NOT (k.iin_clean = '' AND k.benefeciary_name = '')
     )
     {base_where}
 ),
@@ -220,12 +297,6 @@ ball2_t AS (
 ),
 -- Справочники сворачиваются до одной строки на идентификатор,
 -- иначе LEFT JOIN размножит строки реестра
-persons AS (
-    SELECT p.taxpayer_iin_bin AS taxpayer_iin_bin, ifNull(any(p.taxpayer_name), '') AS person_name
-    FROM {settings.DICT_PERSONS} AS p
-    WHERE p.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
-    GROUP BY p.taxpayer_iin_bin
-),
 companies AS (
     SELECT
         c.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -248,7 +319,7 @@ documents AS (
         d.taxpayer_iin_bin AS taxpayer_iin_bin,
         concat('номер документа: ', any(d.doc_number), ', номер серии: ', any(d.doc_seria)) AS doc_info
     FROM {settings.DICT_DOCUMENTS} AS d
-    WHERE d.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+    WHERE d.taxpayer_iin_bin IN (SELECT iin_clean FROM base WHERE iin_clean != '')
     GROUP BY d.taxpayer_iin_bin
 ),
 -- Доля участия берётся по колонке taxpayer_iin_bin таблицы долей: в ней
@@ -258,27 +329,8 @@ shares AS (
     SELECT s.taxpayer_iin_bin AS holder_iin_bin, any(s.share_percentage) AS share_percentage
     FROM {settings.DICT_SHARES} AS s
     WHERE s.taxpayer_iin_bin != ''
-      AND s.taxpayer_iin_bin IN (SELECT benefeciary_iin_bin FROM base)
+      AND s.taxpayer_iin_bin IN (SELECT iin_clean FROM base WHERE iin_clean != '')
     GROUP BY s.taxpayer_iin_bin
-),
--- Имя бенефициара определяется на уровне строки: правило подстановки
--- из dop_info зависит от кода алгоритма
-named AS (
-    SELECT
-        b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
-        b.status AS status,
-        b.algorithm_code AS algorithm_code,
-        b.priority AS priority,
-        b._actual_date AS _actual_date,
-        b.dop_info AS dop_info,
-        if(COALESCE(p.person_name, '') != '',
-            p.person_name,
-            if(b.algorithm_code IN ({first_part_list}),
-                trim(BOTH ' ' FROM splitByChar(',', b.dop_info)[1]),
-                b.dop_info)) AS benefeciary_name
-    FROM base b
-    LEFT JOIN persons p ON b.benefeciary_iin_bin = p.taxpayer_iin_bin
 ),
 pairs AS (
     SELECT
@@ -292,7 +344,7 @@ pairs AS (
         arraySort(groupUniqArray(n.algorithm_code)) AS algorithm_codes,
         min(n.priority) AS min_priority,
         max(n.`_actual_date`) AS _actual_date
-    FROM named AS n
+    FROM base AS n
     GROUP BY n.taxpayer_iin_bin, n.benefeciary_iin_bin
 )
 SELECT
@@ -300,34 +352,10 @@ SELECT
     COALESCE(comp.company_name, '') AS taxpayer_name,
     pr.benefeciary_iin_bin AS benefeciary_iin_bin,
     pr.benefeciary_name AS benefeciary_name,
-    -- Признак нерезидента уточняется на уровне реестра, как в AFM_6_1_99.
-    -- Алгоритм ставит статус по своему полю ИИН, но у части источников
-    -- в этом поле лежит не ИИН, а иностранный идентификатор, и гражданство
-    -- видно только из dop_info. Тип БС (регистрационный либо предполагаемый)
-    -- при этом сохраняется — меняется лишь пометка о резидентстве.
-    CASE
-        WHEN match(pr.benefeciary_iin_bin, '^[0-9]{{12}}$')
-            THEN if(right(left(pr.benefeciary_iin_bin,5),1) = '5'
-                    OR (right(left(pr.benefeciary_iin_bin,5),1) IN ('1','2','3')
-                        AND right(left(pr.benefeciary_iin_bin,7),1) = '0'),
-                    if(pr.status LIKE '%Регистрационный%',
-                        'Регистрационный БС - нерезидент',
-                        'Предполагаемый БС - нерезидент'),
-                    pr.status)
-        WHEN lowerUTF8(pr.dop_info) LIKE '%нерезидент%'
-            THEN if(pr.status LIKE '%Регистрационный%',
-                    'Регистрационный БС - нерезидент',
-                    'Предполагаемый БС - нерезидент')
-        WHEN (lowerUTF8(pr.dop_info) LIKE '%гражданство%'
-              OR lowerUTF8(pr.dop_info) LIKE '%страна%')
-             AND lowerUTF8(pr.dop_info) NOT LIKE '%казахстан%'
-             AND lowerUTF8(pr.dop_info) NOT LIKE '%казахск%'
-             AND lowerUTF8(pr.dop_info) NOT LIKE '%kz%'
-            THEN if(pr.status LIKE '%Регистрационный%',
-                    'Регистрационный БС - нерезидент',
-                    'Предполагаемый БС - нерезидент')
-        ELSE pr.status
-    END AS status,
+    -- Статус уже уточнён в base: там известен настоящий ИИН, до того как
+    -- он подменяется ключом «нерезидент: …». Здесь берётся готовое значение
+    -- по алгоритму с наименьшим баллом.
+    pr.status AS status,
     pr.algorithm_codes AS algorithm_codes,
     arrayStringConcat(pr.algorithm_codes, ', ') AS algorithms,
     pr.min_priority AS priority,

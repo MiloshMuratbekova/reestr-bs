@@ -8,7 +8,7 @@ from app.api.deps import AdminUser, SessionDep
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError
 from app.schemas.listing import RunOut, ScheduleOut, ScheduleUpdate
-from app.services import schedule_service
+from app.services import algorithm_service, schedule_service
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["Расписание"], prefix="/schedule")
@@ -59,6 +59,8 @@ async def run_now(session: SessionDep, user: AdminUser):
         result = await schedule_service.run_recalculation(
             trigger="manual", triggered_by=user.username, session=session
         )
+    except algorithm_service.ReadOnlyMode as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except ClickHouseError as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, f"Пересчёт не выполнен: {exc}"

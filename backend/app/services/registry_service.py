@@ -170,7 +170,7 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
         company_filter="taxpayer_iin_bin = {bin:String}",
         category_source=_category_source,
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
-        resolution_map=await algorithm_service.resolution_map_if_ready(),
+        resolution_map=await algorithm_service.resolution_map_if_ready(tables),
     )
     rows = await clickhouse.fetch_all(sql, {"bin": bin_value})
     return sort_beneficiaries(rows)

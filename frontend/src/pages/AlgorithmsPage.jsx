@@ -9,6 +9,7 @@ import {
   Spinner,
   value,
 } from '../components/ui.jsx'
+import { useReadonly } from '../hooks/useReadonly.js'
 import { diffLines, diffSummary } from '../utils/diff.js'
 
 const EMPTY_FORM = {
@@ -94,6 +95,7 @@ function DiffView({ oldSql, newSql }) {
 
 /* -------------------------------------------------------------------------- */
 export default function AlgorithmsPage() {
+  const readonly = useReadonly()
   const [algorithms, setAlgorithms] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -300,18 +302,21 @@ export default function AlgorithmsPage() {
           <button type="button" className="btn-secondary" onClick={() => setCreating(true)}>
             Добавить алгоритм
           </button>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={recalculate}
-            disabled={busy === '__recalc__'}
-          >
-            {busy === '__recalc__' && <Spinner className="h-4 w-4" />}
-            {busy === '__recalc__' ? 'Идёт пересчёт…' : 'Пересчитать всё'}
-          </button>
+          {!readonly && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={recalculate}
+              disabled={busy === '__recalc__'}
+            >
+              {busy === '__recalc__' && <Spinner className="h-4 w-4" />}
+              {busy === '__recalc__' ? 'Идёт пересчёт…' : 'Пересчитать всё'}
+            </button>
+          )}
         </div>
       </div>
 
+      {readonly && <InfoMessage>База подключена в режиме чтения: таблицы результатов ведёт организация, поэтому запуск алгоритмов и пересчёт отсюда недоступны. Реестр собирается по этим таблицам при каждом обращении.</InfoMessage>}
       {notice && <InfoMessage tone="success">{notice}</InfoMessage>}
       {error && <ErrorMessage message={error} />}
 
@@ -440,14 +445,16 @@ export default function AlgorithmsPage() {
                         >
                           Изменить
                         </button>
-                        <button
-                          type="button"
-                          className="btn-secondary px-2 py-1 text-xs"
-                          onClick={() => runAlgorithm(algorithm.code)}
-                          disabled={busy === algorithm.code}
-                        >
-                          {busy === algorithm.code ? <Spinner className="h-3 w-3" /> : 'Запуск'}
-                        </button>
+                        {!readonly && (
+                          <button
+                            type="button"
+                            className="btn-secondary px-2 py-1 text-xs"
+                            onClick={() => runAlgorithm(algorithm.code)}
+                            disabled={busy === algorithm.code}
+                          >
+                            {busy === algorithm.code ? <Spinner className="h-3 w-3" /> : 'Запуск'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn-secondary px-2 py-1 text-xs"
