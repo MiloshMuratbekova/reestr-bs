@@ -135,15 +135,25 @@ export function StatusBadge({ status }) {
   const text = String(status || '')
   const isRegistration = text.startsWith('Регистрационный')
   const isNonResident = text.includes('нерезидент')
+  // Юрлицо, которое не удалось довести до физлица: не ответ, а обрыв цепочки.
+  // Выделяется отдельно, чтобы его не приняли за настоящего бенефициара.
+  const isUnresolved = text.includes('цепочка не раскрыта')
 
-  const className = isRegistration
-    ? 'bg-afm-100 text-afm-800'
-    : 'bg-violet-100 text-violet-800'
+  const className = isUnresolved
+    ? 'bg-amber-100 text-amber-900'
+    : isRegistration
+      ? 'bg-afm-100 text-afm-800'
+      : 'bg-violet-100 text-violet-800'
+
+  const hint = isUnresolved
+    ? 'Юридическое лицо. Цепочку владения не удалось довести до физического лица'
+    : text
 
   return (
-    <span className={`badge ${className}`} title={text}>
+    <span className={`badge ${className}`} title={hint}>
       {value(text)}
       {isNonResident && <span className="ml-1" aria-hidden="true">🌐</span>}
+      {isUnresolved && <span className="ml-1" aria-hidden="true">⛓️</span>}
     </span>
   )
 }

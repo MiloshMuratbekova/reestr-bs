@@ -34,7 +34,7 @@ from app.algorithms.registry_sql import build_registry_sql
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError, clickhouse
-from app.services import algorithm_service, registry_service
+from app.services import algorithm_service, name_service, registry_service
 from app.services.settings_service import clamp_rows, runtime
 
 logger = get_logger(__name__)
@@ -316,8 +316,12 @@ async def list_beneficiaries(
     rows = await clickhouse.fetch_all(sql, params)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
+    # Дочистка имён моделью — та же, что в карточке компании, чтобы список
+    # и карточка показывали одно и то же наименование
+    await name_service.enrich_names(session, rows)
     for row in rows:
         row.pop("total_count", None)
+        row.pop("dop_info", None)
         row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
         row["is_nonresident"] = bool(int(row.get("is_nonresident") or 0))
 

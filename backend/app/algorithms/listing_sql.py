@@ -307,6 +307,17 @@ def build_beneficiaries_list_sql(
 
     return f"""
 WITH {_scored_cte(result_tables, with_details=True)},
+-- Наименование юрлица-бенефициара — из справочника по БИН, как и в
+-- карточке компании: dop_info у разных алгоритмов записан по-разному,
+-- и один БИН получал бы разные названия.
+beneficiary_names AS (
+    SELECT
+        c.taxpayer_iin_bin AS taxpayer_iin_bin,
+        ifNull(any(c.taxpayer_name), '') AS company_name
+    FROM {settings.DICT_COMPANIES} AS c
+    WHERE c.taxpayer_iin_bin IN (SELECT iin_clean FROM base WHERE iin_clean != '')
+    GROUP BY c.taxpayer_iin_bin
+),
 persons AS (
     SELECT
         p.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -321,8 +332,10 @@ per_pair AS (
         b.benefeciary_iin_bin AS benefeciary_iin_bin,
         any(b.iin_clean) AS iin_clean,
         argMin(b.status, b.priority) AS status,
-        argMin(b.dop_name, b.priority) AS dop_name,
-        argMin(b.dop_info, b.priority) AS dop_info,
+        -- Пара (балл, имя) в ключе сравнения: при равных баллах победитель
+        -- иначе выбирался бы произвольно, и один ИИН назывался бы по-разному
+        argMin(b.dop_name, (b.priority, b.dop_name)) AS dop_name,
+        argMin(b.dop_info, (b.priority, b.dop_name)) AS dop_info,
         groupUniqArray(b.algorithm_code) AS algorithm_codes,
         min(b.priority) AS min_priority
     FROM base AS b
@@ -344,14 +357,18 @@ pair_named AS (
                 pp.status)) AS status,
         pp.algorithm_codes AS algorithm_codes,
         pp.min_priority AS min_priority,
+        pp.dop_info AS dop_info,
         COALESCE(sc.ball3, 0) AS ball3,
         -- Справочник ФЛ ищется по настоящему ИИН; когда его нет, имя уже
         -- разобрано из dop_info на шаге чистки
         if(COALESCE(pr.person_name, '') != '',
             pr.person_name,
-            pp.dop_name) AS benefeciary_name
+            if(COALESCE(bn.company_name, '') != '',
+                bn.company_name,
+                pp.dop_name)) AS benefeciary_name
     FROM per_pair AS pp
     LEFT JOIN persons AS pr ON pp.iin_clean = pr.taxpayer_iin_bin
+    LEFT JOIN beneficiary_names AS bn ON pp.iin_clean = bn.taxpayer_iin_bin
     LEFT JOIN scored AS sc
         ON pp.taxpayer_iin_bin = sc.taxpayer_iin_bin
         AND pp.benefeciary_iin_bin = sc.benefeciary_iin_bin
@@ -359,12 +376,15 @@ pair_named AS (
 rolled AS (
     SELECT
         pn.benefeciary_iin_bin AS benefeciary_iin_bin,
-        argMin(pn.benefeciary_name, pn.min_priority) AS benefeciary_name,
-        argMin(pn.status, pn.min_priority) AS status,
+        argMin(pn.benefeciary_name, (pn.min_priority, pn.benefeciary_name))
+            AS benefeciary_name,
+        argMin(pn.status, (pn.min_priority, pn.benefeciary_name)) AS status,
         arraySort(arrayDistinct(arrayFlatten(groupArray(pn.algorithm_codes)))) AS algorithm_codes,
         count(DISTINCT pn.taxpayer_iin_bin) AS company_count,
         max(pn.ball3) AS max_ball3,
         max(pn.status LIKE '%нерезидент%') AS is_nonresident,
+        -- Исходная строка сведений: по ней модель дочищает имя при выводе
+        argMin(pn.dop_info, (pn.min_priority, pn.benefeciary_name)) AS dop_info,
         min(pn.min_priority) AS min_priority
     FROM pair_named AS pn
     GROUP BY pn.benefeciary_iin_bin
@@ -378,6 +398,7 @@ SELECT
     r.company_count AS company_count,
     r.max_ball3 AS max_ball3,
     r.is_nonresident AS is_nonresident,
+    r.dop_info AS dop_info,
     r.min_priority AS priority,
     count() OVER () AS total_count
 FROM rolled AS r

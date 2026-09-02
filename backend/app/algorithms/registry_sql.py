@@ -144,23 +144,17 @@ def build_registry_sql(
             " w.fl_iin_bin, r.benefeciary_iin_bin)"
         )
 
-    # Бенефициарный собственник — всегда физическое лицо. Юридическое,
-    # которое не удалось развернуть до ФЛ даже за четыре уровня, в реестр
-    # не попадает: это не ответ, а тупик в цепочке владения.
+    # Бенефициарный собственник — всегда физическое лицо. Юридическое сначала
+    # разворачивается по цепочке владения (см. resolution_map). Если даже за
+    # четыре уровня физлицо не нашлось, строка НЕ отбрасывается, а помечается
+    # «цепочка не раскрыта»: скрывать зацепку хуже, чем показать её с оговоркой,
+    # иначе карточка молчит при непустой таблице результатов.
     #
-    # Отсев делается в base, до расчёта баллов, а не в конце. Иначе такая
-    # строка входила бы в ball1 компании и занижала вероятность настоящих
-    # бенефициаров — при том что сама в выдаче не показывалась бы.
+    # Помеченные строки считаются в ball1 наравне с остальными — проценты
+    # должны сходиться с тем, что показано.
     base_conditions: List[str] = []
     if company_filter:
         base_conditions.append(f"({company_filter})")
-    if resolution_map:
-        # Признак ЮЛ проверяется по настоящему ИИН, а не по ключу: у ключа
-        # вида «нерезидент: …» никакой структуры БИН нет, и правило пятого
-        # знака к нему неприменимо.
-        base_conditions.append(
-            "(iin_clean = '' OR left(right(iin_clean, 8), 1) NOT IN ('4', '5'))"
-        )
     base_where = ("WHERE " + " AND ".join(base_conditions)) if base_conditions else ""
 
     # Выражения приведения данных в порядок — см. app.algorithms.cleaning
@@ -171,7 +165,10 @@ def build_registry_sql(
     first_part_expr = cleaning.first_part("c.dop_info")
     key_expr = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
     nonresident_status_expr = cleaning.nonresident_status("k.status")
+    unresolved_status_expr = cleaning.unresolved_ul_status("k.status")
+    is_ul_expr = cleaning.IS_UL.format(col="k.iin_clean")
     persons_table = settings.DICT_PERSONS
+    companies_table = settings.DICT_COMPANIES
 
     # Отбор по компании можно применить ещё до подстановки: замена меняет
     # бенефициара, но никогда не трогает taxpayer_iin_bin. Для карточки
@@ -222,6 +219,17 @@ persons AS (
     WHERE p.taxpayer_iin_bin IN (SELECT iin_clean FROM cleaned WHERE iin_clean != '')
     GROUP BY p.taxpayer_iin_bin
 ),
+-- Наименование юрлица-бенефициара берётся из справочника по его БИН, а не из
+-- dop_info. В dop_info одна и та же организация у разных алгоритмов записана
+-- по-разному, и один БИН получал бы разные названия. Справочник даёт одно.
+beneficiary_names AS (
+    SELECT
+        c.taxpayer_iin_bin AS taxpayer_iin_bin,
+        ifNull(any(c.taxpayer_name), '') AS company_name
+    FROM {companies_table} AS c
+    WHERE c.taxpayer_iin_bin IN (SELECT iin_clean FROM cleaned WHERE iin_clean != '')
+    GROUP BY c.taxpayer_iin_bin
+),
 -- Имя, ключ и статус считаются здесь, ДО расчёта баллов. Иначе ball1 и ball2
 -- сложились бы по грязному ИИН, а в выдаче стоял бы чистый — и проценты
 -- перестали бы сходиться с показанными строками.
@@ -234,17 +242,23 @@ keyed AS (
         c.priority AS priority,
         c.`_actual_date` AS _actual_date,
         c.dop_info AS dop_info,
-        -- Имя: справочник ФЛ, затем наименование из кавычек, затем правило
-        -- «до первой запятой» для алгоритмов, где dop_info начинается с ФИО
+        -- Имя по убыванию надёжности: справочник физлиц, справочник
+        -- организаций, наименование из кавычек, правило «до первой запятой»
+        -- для алгоритмов, где dop_info начинается с ФИО, и лишь затем строка
+        -- целиком. Справочники стоят первыми потому, что дают одно и то же
+        -- имя для одного ИИН независимо от того, какой алгоритм нашёл лицо.
         if(COALESCE(pr.person_name, '') != '',
             pr.person_name,
-            if({quoted_expr} != '',
-                {quoted_expr},
-                if(c.algorithm_code IN ({first_part_list}),
-                    {first_part_expr},
-                    c.dop_info))) AS benefeciary_name
+            if(COALESCE(bn.company_name, '') != '',
+                bn.company_name,
+                if({quoted_expr} != '',
+                    {quoted_expr},
+                    if(c.algorithm_code IN ({first_part_list}),
+                        {first_part_expr},
+                        c.dop_info)))) AS benefeciary_name
     FROM cleaned AS c
     LEFT JOIN persons AS pr ON c.iin_clean = pr.taxpayer_iin_bin
+    LEFT JOIN beneficiary_names AS bn ON c.iin_clean = bn.taxpayer_iin_bin
 ),
 base AS (
     SELECT * FROM (
@@ -256,15 +270,19 @@ base AS (
             -- иностранцев одной компании в одну строку.
             {key_expr} AS benefeciary_iin_bin,
             k.benefeciary_name AS benefeciary_name,
-            -- Нет настоящего ИИН — значит казахстанского номера у лица нет,
-            -- и это нерезидент. Тип БС при этом сохраняется.
-            if(k.iin_clean = '',
-                {nonresident_status_expr},
-                if(right(left(k.iin_clean, 5), 1) = '5'
-                    OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
-                        AND right(left(k.iin_clean, 7), 1) = '0'),
+            -- Порядок важен. Сначала юрлицо: если после раскрутки ИИН всё ещё
+            -- принадлежит организации, цепочка не сошлась. Затем нерезидент:
+            -- нет настоящего ИИН — значит казахстанского номера у лица нет.
+            -- Тип БС в обоих случаях сохраняется.
+            if({is_ul_expr},
+                {unresolved_status_expr},
+                if(k.iin_clean = '',
                     {nonresident_status_expr},
-                    k.status)) AS status,
+                    if(right(left(k.iin_clean, 5), 1) = '5'
+                        OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
+                            AND right(left(k.iin_clean, 7), 1) = '0'),
+                        {nonresident_status_expr},
+                        k.status))) AS status,
             k.algorithm_code AS algorithm_code,
             k.priority AS priority,
             k.`_actual_date` AS _actual_date,
@@ -339,8 +357,11 @@ pairs AS (
         -- при нескольких сработавших алгоритмах побеждает статус с наименьшим
         -- баллом: регистрационный (priority 0) важнее предполагаемого
         argMin(n.status, n.priority) AS status,
-        argMin(n.benefeciary_name, n.priority) AS benefeciary_name,
-        argMin(n.dop_info, n.priority) AS dop_info,
+        -- Ключ сравнения — пара (балл, само имя). Без имени в ключе при двух
+        -- алгоритмах с равным баллом победитель выбирался бы произвольно,
+        -- и один и тот же ИИН мог называться по-разному в карточке и в списке.
+        argMin(n.benefeciary_name, (n.priority, n.benefeciary_name)) AS benefeciary_name,
+        argMin(n.dop_info, (n.priority, n.benefeciary_name)) AS dop_info,
         arraySort(groupUniqArray(n.algorithm_code)) AS algorithm_codes,
         min(n.priority) AS min_priority,
         max(n.`_actual_date`) AS _actual_date
@@ -494,3 +515,41 @@ FROM (
 GROUP BY d.algorithm_code
 ORDER BY d.algorithm_code
 """.strip()
+
+
+def build_empty_reason_sql(result_tables: Iterable[str]) -> str:
+    """Почему по компании ничего не показано, хотя строки в источнике есть.
+
+    Считается по тому же объединению и той же чистке, что и реестр, но без
+    расчёта баллов: нужен не результат, а причина отсева. Запрос выполняется
+    только когда карточка вышла пустой, поэтому на обычную выдачу не влияет.
+
+    Отдаёт по одной строке: сколько записей нашлось всего, сколько из них
+    указывают на юрлицо (его надо раскрутить до физлица, и если цепочка
+    не сошлась — строка выпадает), сколько не опознать вовсе, и какие
+    алгоритмы эту компанию нашли.
+    """
+    union_sql = build_union_sql(result_tables)
+    first_part_list = ", ".join(f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS)
+    iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    name = cleaning.name_from_dop("u.dop_info", "u.algorithm_code", first_part_list)
+
+    return f"""
+WITH cleaned AS (
+    SELECT
+        {iin_clean} AS iin_clean,
+        {name} AS benefeciary_name,
+        u.algorithm_code AS algorithm_code
+    FROM (
+{union_sql}
+    ) AS u
+    WHERE u.taxpayer_iin_bin = {{bin:String}}
+)
+SELECT
+    count() AS rows_total,
+    countIf(c.iin_clean != ''
+        AND left(right(c.iin_clean, 8), 1) IN ('4', '5')) AS ul_rows,
+    countIf(c.iin_clean = '' AND c.benefeciary_name = '') AS unidentified_rows,
+    arraySort(groupUniqArray(c.algorithm_code)) AS algorithms
+FROM cleaned AS c
+"""

@@ -200,14 +200,82 @@ async def get_algorithm(session: AsyncSession, code: str) -> BsAlgorithm:
     return algorithm
 
 
+#: Семь полей из ТЗ. Источник реестра обязан отдавать их все, иначе UNION
+#: не соберётся и реестр перестанет работать целиком.
+REQUIRED_SOURCE_COLUMNS = frozenset({
+    "taxpayer_iin_bin",
+    "benefeciary_iin_bin",
+    "status",
+    "algorithm_code",
+    "priority",
+    "_actual_date",
+    "dop_info",
+})
+
+#: Пригодность сводной таблицы проверяется один раз за процесс
+_merged_checked = False
+_merged_table: Optional[str] = None
+
+
+async def merged_table_if_usable() -> Optional[str]:
+    """Сводная таблица бенефициаров, если она есть и нужной формы.
+
+    Форма проверяется по системному словарю, а не принимается на веру:
+    таблица без одного из семи полей уронила бы UNION, и пустая карточка
+    была бы уже у всех компаний, а не у одной.
+    """
+    global _merged_checked, _merged_table
+    if _merged_checked:
+        return _merged_table
+
+    _merged_checked = True
+    fqn = (settings.MERGED_TABLE or "").strip()
+    if not fqn or "." not in fqn:
+        return None
+
+    database, table = fqn.split(".", 1)
+    try:
+        columns = await clickhouse.table_columns(database, table)
+    except ClickHouseError as exc:
+        logger.warning("Не удалось прочитать состав сводной таблицы %s: %s", fqn, exc)
+        return None
+
+    if not columns:
+        logger.info("Сводной таблицы %s нет — реестр читает только алгоритмы", fqn)
+        return None
+
+    missing = REQUIRED_SOURCE_COLUMNS - columns
+    if missing:
+        logger.warning(
+            "Сводная таблица %s не подходит, не хватает полей: %s. "
+            "Реестр читает только таблицы алгоритмов",
+            fqn,
+            ", ".join(sorted(missing)),
+        )
+        return None
+
+    logger.info("Сводная таблица %s взята основой реестра", fqn)
+    _merged_table = fqn
+    return _merged_table
+
+
 async def active_result_tables(session: AsyncSession) -> List[str]:
-    """Таблицы результатов активных алгоритмов, реально существующие в ClickHouse.
+    """Источники реестра: сводная таблица плюс таблицы активных алгоритмов.
+
+    Сводная таблица идёт первой и служит основой. Таблицы алгоритмов её
+    дополняют: содержимое у них то же самое, но сводная строится отдельным
+    прогоном и может отстать, а отдельная таблица — наоборот, оказаться
+    пересчитанной заново. Повторы схлопывает DISTINCT в самом реестре,
+    поэтому лишних строк объединение не даёт.
 
     Отсутствующая таблица (алгоритм ещё ни разу не запускался) исключается,
     иначе UNION в реестре упадёт целиком.
     """
     algorithms = await list_algorithms(session, only_active=True)
     tables: List[str] = []
+    merged = await merged_table_if_usable()
+    if merged:
+        tables.append(merged)
     for algorithm in algorithms:
         fqn = algorithm.clickhouse_result_table
         if not fqn or "." not in fqn:

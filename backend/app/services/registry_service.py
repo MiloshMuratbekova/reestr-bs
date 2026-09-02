@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.algorithms.registry_sql import (
     build_company_summary_sql,
+    build_empty_reason_sql,
     build_registry_sql,
     build_stats_by_algorithm_sql,
     build_stats_sql,
@@ -19,7 +20,7 @@ from app.algorithms.registry_sql import (
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError, clickhouse
-from app.services import algorithm_service
+from app.services import algorithm_service, name_service
 from app.services.settings_service import clamp_rows, runtime
 
 logger = get_logger(__name__)
@@ -173,6 +174,9 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
         resolution_map=await algorithm_service.resolution_map_if_ready(tables),
     )
     rows = await clickhouse.fetch_all(sql, {"bin": bin_value})
+    # Имена, с которыми не справились правила, дочищает модель — уже
+    # разобранное берётся из PostgreSQL, к модели идут только новые строки
+    await name_service.enrich_names(session, rows)
     return sort_beneficiaries(rows)
 
 
@@ -195,6 +199,11 @@ async def get_company_card(session: AsyncSession, bin_value: str) -> Optional[Di
     else:
         beneficiaries = await get_beneficiaries(session, bin_value)
         warning = None
+        if not beneficiaries:
+            # Пусто может означать и «никто не нашёл», и «нашли, но всё
+            # отсеялось». Для пользователя это разные вещи: во втором случае
+            # он видит записи в базе и не понимает, куда они делись.
+            warning = await explain_empty(session, bin_value)
 
     return {
         "company": company,
@@ -365,3 +374,46 @@ async def get_stats(session: AsyncSession) -> Dict[str, Any]:
         "algorithms_total": len(algorithms),
         "algorithms_calculated": len(tables),
     }
+
+
+async def explain_empty(session: AsyncSession, bin_value: str) -> Optional[str]:
+    """Пояснение, почему по компании не показано ни одного бенефициара.
+
+    Возвращает None, если алгоритмы её действительно не нашли — тогда пустая
+    карточка сама себя объясняет и лишний текст ни к чему.
+    """
+    tables = await algorithm_service.active_result_tables(session)
+    if not tables:
+        return "Ни один алгоритм ещё не рассчитан, реестр пуст."
+
+    try:
+        row = await clickhouse.fetch_one(
+            build_empty_reason_sql(tables), {"bin": bin_value}
+        )
+    except ClickHouseError as exc:
+        logger.warning("Не удалось объяснить пустую карточку %s: %s", bin_value, exc)
+        return None
+
+    if not row or not int(row.get("rows_total") or 0):
+        return None
+
+    total = int(row["rows_total"])
+    ul_rows = int(row.get("ul_rows") or 0)
+    unidentified = int(row.get("unidentified_rows") or 0)
+    codes = ", ".join(row.get("algorithms") or [])
+
+    parts = [f"Алгоритмы нашли записи по этой компании ({total}), "
+             f"но ни одна не попала в реестр."]
+    if unidentified:
+        parts.append(
+            f"Из них {unidentified} не удалось опознать: нет ни ИИН, ни имени — "
+            "в поле ИИН стоит заглушка, а сведения пусты."
+        )
+    if ul_rows:
+        parts.append(
+            f"На юридические лица указывают {ul_rows}; такие строки "
+            "показываются с пометкой «цепочка не раскрыта»."
+        )
+    if codes:
+        parts.append(f"Сработавшие алгоритмы: {codes}.")
+    return " ".join(parts)

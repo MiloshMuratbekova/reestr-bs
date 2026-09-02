@@ -337,6 +337,15 @@ class ClickHouseClient:
         )
         return bool(value and int(value) > 0)
 
+    async def table_columns(self, database: str, table: str) -> set:
+        """Имена колонок таблицы. Пустое множество — таблицы нет."""
+        rows = await self.fetch_all(
+            "SELECT name FROM system.columns "
+            "WHERE database = {db:String} AND table = {tbl:String}",
+            {"db": database, "tbl": table},
+        )
+        return {row["name"] for row in rows}
+
     async def table_row_count(self, database: str, table: str) -> int:
         value = await self.fetch_value(
             f"SELECT count() AS cnt FROM {database}.{table}",
