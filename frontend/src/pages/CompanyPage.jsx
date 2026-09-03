@@ -13,6 +13,7 @@ import {
   Spinner,
   StatusBadge,
   riskStyle,
+  isCompanyBin,
   value,
 } from '../components/ui.jsx'
 
@@ -36,10 +37,21 @@ function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
         {company.is_state_owned && (
           <span className="badge bg-slate-200 text-slate-700">Государственная собственность</span>
         )}
+        {company.is_unknown && (
+          <span className="badge bg-amber-100 text-amber-900">Нет в справочнике ЮЛ</span>
+        )}
       </div>
 
       <div className="p-5">
         <h1 className="text-lg font-semibold text-slate-900">{value(company.taxpayer_name)}</h1>
+
+        {company.is_unknown && (
+          <p className="mt-1 text-xs text-slate-500">
+            Реквизиты недоступны: компании нет в справочнике юридических лиц —
+            так бывает у иностранных организаций. Наименование восстановлено
+            по сведениям алгоритмов.
+          </p>
+        )}
 
         <dl className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="БИН">
@@ -72,9 +84,20 @@ function BeneficiaryCard({ item, onExplain, explaining }) {
     <div className={`rounded-lg border p-4 ${style.card}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-900">
-            {value(item.benefeciary_name)}
-          </div>
+          {/* Бенефициар-юрлицо ведёт на свою карточку: она теперь строится
+              и для компаний, которых нет в справочнике ЮЛ */}
+          {isCompanyBin(item.benefeciary_iin_bin) ? (
+            <Link
+              to={`/company/${encodeURIComponent(item.benefeciary_iin_bin)}`}
+              className="text-sm font-semibold text-afm-700 hover:underline"
+            >
+              {value(item.benefeciary_name)}
+            </Link>
+          ) : (
+            <div className="text-sm font-semibold text-slate-900">
+              {value(item.benefeciary_name)}
+            </div>
+          )}
           <div className="mt-0.5 text-xs text-slate-600">
             ИИН: <span className="font-mono">{value(item.benefeciary_iin_bin)}</span>
           </div>

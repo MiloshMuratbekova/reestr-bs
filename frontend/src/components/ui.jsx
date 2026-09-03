@@ -131,6 +131,17 @@ export function ProbabilityBar({ value: ball3, showLabel = true }) {
   )
 }
 
+/** Похож ли идентификатор на БИН организации.
+ *
+ * Признак из ТЗ: двенадцать цифр, пятый знак справа восьмизначной части
+ * равен 4 или 5. По нему бенефициар-юрлицо получает ссылку на свою карточку.
+ */
+export function isCompanyBin(value) {
+  const text = String(value || '')
+  if (!/^[0-9]{12}$/.test(text)) return false
+  return text[4] === '4' || text[4] === '5'
+}
+
 export function StatusBadge({ status }) {
   const text = String(status || '')
   const isRegistration = text.startsWith('Регистрационный')

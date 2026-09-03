@@ -579,3 +579,29 @@ SELECT
     arraySort(groupUniqArray(c.algorithm_code)) AS algorithms
 FROM cleaned AS c
 """
+
+
+def build_company_name_fallback_sql(result_tables: Iterable[str]) -> str:
+    """Наименование компании, которой нет в справочнике юридических лиц.
+
+    Такое бывает у иностранных организаций: бенефициары у них выявлены,
+    а в справочнике ЮЛ записи нет. Тот же БИН обычно встречается в реестре
+    как бенефициар, и рядом лежит строка сведений с названием — её и
+    разбираем теми же правилами, что и имя бенефициара.
+    """
+    union_sql = build_union_sql(result_tables)
+    iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    name = cleaning.display_name("u.dop_info")
+    return f"""
+SELECT argMin(k.name, (k.priority, k.name)) AS taxpayer_name
+FROM (
+    SELECT
+        {iin_clean} AS iin_clean,
+        {name} AS name,
+        u.priority AS priority
+    FROM (
+{union_sql}
+    ) AS u
+) AS k
+WHERE k.iin_clean = {{bin:String}} AND k.name != ''
+"""

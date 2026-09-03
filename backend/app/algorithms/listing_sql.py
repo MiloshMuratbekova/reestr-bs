@@ -166,6 +166,18 @@ summary AS (
     FROM scored AS s
     GROUP BY s.taxpayer_iin_bin
 ),
+-- Наименование для компаний, которых нет в справочнике ЮЛ: иностранных
+-- и прочих. Тот же БИН обычно встречается в реестре как бенефициар, и там
+-- рядом лежит строка сведений с названием — её и разбираем.
+fallback_names AS (
+    SELECT
+        b.iin_clean AS taxpayer_iin_bin,
+        argMin(b.dop_name, (b.priority, b.dop_name)) AS taxpayer_name
+    FROM base AS b
+    WHERE b.iin_clean != ''
+      AND b.iin_clean IN (SELECT taxpayer_iin_bin FROM summary)
+    GROUP BY b.iin_clean
+),
 dict AS (
     SELECT
         c.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -189,14 +201,22 @@ own AS (
 -- Государственные компании: по ТЗ бенефициары для них не определяются,
 -- поэтому показатели обнуляются здесь же, до сортировки и фильтров.
 -- Иначе такая компания встала бы в начало списка по риску, показывая ноль.
+-- Список строится ОТ реестра, а справочник его дополняет. Прежде было
+-- наоборот, и компания, которой в справочнике ЮЛ нет — иностранная или
+-- любая другая, — в список не попадала вовсе, хотя бенефициары у неё
+-- выявлены. Ссылка на такую компанию тоже никуда не вела.
 rows AS (
     SELECT
-        d.taxpayer_iin_bin AS taxpayer_iin_bin,
-        d.taxpayer_name AS taxpayer_name,
-        d.category AS category,
-        d.code_nd AS code_nd,
-        d.address AS address,
-        d.reg_start_date AS reg_start_date,
+        m.taxpayer_iin_bin AS taxpayer_iin_bin,
+        if(COALESCE(d.taxpayer_name, '') != '',
+            d.taxpayer_name,
+            COALESCE(f.taxpayer_name, '')) AS taxpayer_name,
+        COALESCE(d.category, '') AS category,
+        COALESCE(d.code_nd, '') AS code_nd,
+        COALESCE(d.address, '') AS address,
+        COALESCE(d.reg_start_date, '') AS reg_start_date,
+        -- Нет в справочнике — значит сведений о компании у нас нет
+        COALESCE(d.taxpayer_iin_bin, '') = '' AS is_unknown,
         COALESCE(w.ownership_type, '') AS ownership_type,
         positionCaseInsensitive(COALESCE(w.ownership_type, ''), 'Государственная') > 0
             AS is_state_owned,
@@ -204,9 +224,10 @@ rows AS (
             0, COALESCE(m.beneficiary_count, 0)) AS beneficiary_count,
         if(positionCaseInsensitive(COALESCE(w.ownership_type, ''), 'Государственная') > 0,
             0, COALESCE(m.max_ball3, 0)) AS max_ball3
-    FROM dict AS d
-    LEFT JOIN summary AS m ON d.taxpayer_iin_bin = m.taxpayer_iin_bin
-    LEFT JOIN own AS w ON d.taxpayer_iin_bin = w.taxpayer_iin_bin
+    FROM summary AS m
+    LEFT JOIN dict AS d ON m.taxpayer_iin_bin = d.taxpayer_iin_bin
+    LEFT JOIN fallback_names AS f ON m.taxpayer_iin_bin = f.taxpayer_iin_bin
+    LEFT JOIN own AS w ON m.taxpayer_iin_bin = w.taxpayer_iin_bin
 )
 SELECT
     d.taxpayer_iin_bin AS taxpayer_iin_bin,
@@ -217,6 +238,7 @@ SELECT
     d.reg_start_date AS reg_start_date,
     d.ownership_type AS ownership_type,
     d.is_state_owned AS is_state_owned,
+    d.is_unknown AS is_unknown,
     d.beneficiary_count AS beneficiary_count,
     d.max_ball3 AS max_ball3,
     count() OVER () AS total_count

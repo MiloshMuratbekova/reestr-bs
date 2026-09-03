@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.algorithms.registry_sql import (
+    build_company_name_fallback_sql,
     build_company_summary_sql,
     build_empty_reason_sql,
     build_registry_sql,
@@ -126,14 +127,27 @@ async def get_founders(bin_value: str) -> List[Dict[str, Any]]:
         f"""
         SELECT DISTINCT
             ifNull(toString(f.founder_iin_bin), '') AS founder_iin_bin,
-            ifNull(if(f.founder_ul_name = '',
-               concat(f.founder_last_name, ' ', f.founder_first_name, ' ', f.founder_part_name),
-               f.founder_ul_name), '') AS founder_name,
+            -- Каждое поле снимается с Nullable ОТДЕЛЬНО. concat от NULL даёт
+            -- NULL целиком, поэтому у учредителя без отчества пропадало всё
+            -- имя, а не одно отчество. Сравнение с '' у Nullable тоже даёт
+            -- NULL, и ветка выбора уходила не туда.
+            if(ifNull(toString(f.founder_ul_name), '') != '',
+                toString(f.founder_ul_name),
+                trimBoth(concat(
+                    ifNull(toString(f.founder_last_name), ''), ' ',
+                    ifNull(toString(f.founder_first_name), ''), ' ',
+                    ifNull(toString(f.founder_part_name), '')))) AS founder_name,
             ifNull(toString(f.share_percentage), '') AS share_percentage,
-            toString(f.`_actual_date`) AS _actual_date
+            ifNull(toString(f.`_actual_date`), '') AS _actual_date
         FROM {settings.TBL_FOUNDERS} AS f
         WHERE f.taxpayer_iin_bin = {{bin:String}}
-          AND f.`_actual_date` = (SELECT max(`_actual_date`) FROM {settings.TBL_FOUNDERS})
+          -- Дата берётся последняя ПО ЭТОЙ компании, а не по всей таблице:
+          -- если её сведения не обновлялись в последнюю загрузку, при сравнении
+          -- с общим максимумом учредители пропадали целиком
+          AND f.`_actual_date` = (
+              SELECT max(`_actual_date`) FROM {settings.TBL_FOUNDERS}
+              WHERE taxpayer_iin_bin = {{bin:String}}
+          )
         ORDER BY founder_name
         """,
         {"bin": bin_value},
@@ -146,11 +160,18 @@ async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
         f"""
         SELECT DISTINCT
             ifNull(toString(d.employee_iin_bin), '') AS director_iin_bin,
-            ifNull(concat(d.employee_last_name, ' ', d.employee_first_name, ' ', d.employee_part_name), '') AS director_name,
-            toString(d.`_actual_date`) AS _actual_date
+            -- То же, что у учредителей: NULL в отчестве обнулял всё имя
+            trimBoth(concat(
+                ifNull(toString(d.employee_last_name), ''), ' ',
+                ifNull(toString(d.employee_first_name), ''), ' ',
+                ifNull(toString(d.employee_part_name), ''))) AS director_name,
+            ifNull(toString(d.`_actual_date`), '') AS _actual_date
         FROM {settings.TBL_DIRECTORS} AS d
         WHERE d.taxpayer_iin_bin = {{bin:String}}
-          AND d.`_actual_date` = (SELECT max(`_actual_date`) FROM {settings.TBL_DIRECTORS})
+          AND d.`_actual_date` = (
+              SELECT max(`_actual_date`) FROM {settings.TBL_DIRECTORS}
+              WHERE taxpayer_iin_bin = {{bin:String}}
+          )
         ORDER BY director_name
         """,
         {"bin": bin_value},
@@ -180,11 +201,61 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
     return sort_beneficiaries(rows)
 
 
+async def company_outside_dictionary(
+    session: AsyncSession, bin_value: str
+) -> Optional[Dict[str, Any]]:
+    """Заготовка карточки для компании, которой нет в справочнике ЮЛ.
+
+    Возвращает None, если такого БИН нет и в реестре: тогда открывать
+    действительно нечего. Иначе отдаёт минимальные реквизиты — сам БИН и
+    наименование, разобранное из реестра, — чтобы ссылка на компанию вела
+    на карточку, а не в пустоту.
+    """
+    tables = await algorithm_service.active_result_tables(session)
+    if not tables:
+        return None
+
+    summary = await clickhouse.fetch_one(
+        build_company_summary_sql(tables, "taxpayer_iin_bin = {bin:String}"),
+        {"bin": bin_value},
+    )
+    if not summary:
+        return None
+
+    name = ""
+    try:
+        row = await clickhouse.fetch_one(
+            build_company_name_fallback_sql(tables), {"bin": bin_value}
+        )
+        name = str((row or {}).get("taxpayer_name") or "")
+    except ClickHouseError as exc:
+        logger.warning("Не удалось определить наименование %s: %s", bin_value, exc)
+
+    return {
+        "taxpayer_iin_bin": bin_value,
+        "taxpayer_name": name,
+        "category": "",
+        "reg_start_date": "",
+        "address": "",
+        "code_nd": "",
+        "ownership_type": "",
+        "is_state_owned": False,
+        # Признак для интерфейса: сведений о компании в справочнике нет,
+        # показаны только те, что удалось собрать из реестра
+        "is_unknown": True,
+    }
+
+
 async def get_company_card(session: AsyncSession, bin_value: str) -> Optional[Dict[str, Any]]:
     """Полная карточка компании."""
     company = await get_company_info(bin_value)
     if company is None:
+        # Компании нет в справочнике ЮЛ, но бенефициары у неё могут быть
+        # выявлены — иностранные организации попадают именно сюда
+        company = await company_outside_dictionary(session, bin_value)
+    if company is None:
         return None
+    company.setdefault("is_unknown", False)
 
     founders = await get_founders(bin_value)
     directors = await get_directors(bin_value)
