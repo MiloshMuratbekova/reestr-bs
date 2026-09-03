@@ -120,7 +120,9 @@ async def explain(
                 (
                     b
                     for b in card["beneficiaries"]
-                    if b.get("benefeciary_iin_bin") == payload.benefeciary_iin_bin
+                    # Сверка по служебному ключу: в поле ИИН у нерезидента
+                    # стоит слово «нерезидент», одинаковое у многих
+                    if b.get("benefeciary_key") == payload.benefeciary_iin_bin
                 ),
                 None,
             )

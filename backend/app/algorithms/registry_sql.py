@@ -75,6 +75,42 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
     return "\n    UNION ALL\n".join(parts)
 
 
+def build_keyed_union_sql(
+    union_sql: str, passthrough: List[str], *, where: str = ""
+) -> str:
+    """Объединение, приведённое в порядок: очищенный ИИН и ключ сведения.
+
+    Нужен сводкам и статистике. Без него они считали бы по сырому полю:
+    заглушки 000000000 и «-» шли бы за отдельных бенефициаров, а один и тот
+    же нерезидент, записанный двумя алгоритмами по-разному, — за двоих.
+    Числа на дашборде тогда не сходятся с содержимым карточек.
+    """
+    iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    name = cleaning.display_name("u.dop_info")
+    key = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
+    inner = "".join(f"        u.{column} AS {column},\n" for column in passthrough)
+    outer = "".join(f"        k.{column} AS {column},\n" for column in passthrough)
+    return f"""    SELECT DISTINCT
+        k.taxpayer_iin_bin AS taxpayer_iin_bin,
+        {key} AS benefeciary_key,
+        k.iin_clean AS iin_clean,
+        k.benefeciary_name AS benefeciary_name,
+{outer}        1 AS _keyed
+    FROM (
+        SELECT
+            u.taxpayer_iin_bin AS taxpayer_iin_bin,
+            {iin_clean} AS iin_clean,
+            {name} AS benefeciary_name,
+{inner}        1 AS _raw
+        FROM (
+{union_sql}
+        ) AS u
+        {where}
+    ) AS k
+    -- Ни ИИН, ни имени — опознать лицо нечем
+    WHERE NOT (k.iin_clean = '' AND k.benefeciary_name = '')"""
+
+
 def build_registry_sql(
     result_tables: Iterable[str],
     *,
@@ -166,6 +202,8 @@ def build_registry_sql(
     key_expr = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
     nonresident_status_expr = cleaning.nonresident_status("k.status")
     unresolved_status_expr = cleaning.unresolved_ul_status("k.status")
+    display_name_expr = cleaning.display_name("c.dop_info")
+    display_iin_expr = cleaning.display_iin("pr.iin_clean", "pr.is_nonresident")
     is_ul_expr = cleaning.IS_UL.format(col="k.iin_clean")
     persons_table = settings.DICT_PERSONS
     companies_table = settings.DICT_COMPANIES
@@ -242,20 +280,15 @@ keyed AS (
         c.priority AS priority,
         c.`_actual_date` AS _actual_date,
         c.dop_info AS dop_info,
-        -- Имя по убыванию надёжности: справочник физлиц, справочник
-        -- организаций, наименование из кавычек, правило «до первой запятой»
-        -- для алгоритмов, где dop_info начинается с ФИО, и лишь затем строка
-        -- целиком. Справочники стоят первыми потому, что дают одно и то же
-        -- имя для одного ИИН независимо от того, какой алгоритм нашёл лицо.
+        -- В поле имени должно остаться только имя. По убыванию надёжности:
+        -- справочник физлиц, справочник организаций, разбор строки сведений.
+        -- Справочники стоят первыми потому, что дают одно и то же имя для
+        -- одного ИИН независимо от того, какой алгоритм нашёл лицо.
         if(COALESCE(pr.person_name, '') != '',
             pr.person_name,
             if(COALESCE(bn.company_name, '') != '',
                 bn.company_name,
-                if({quoted_expr} != '',
-                    {quoted_expr},
-                    if(c.algorithm_code IN ({first_part_list}),
-                        {first_part_expr},
-                        c.dop_info)))) AS benefeciary_name
+                {display_name_expr})) AS benefeciary_name
     FROM cleaned AS c
     LEFT JOIN persons AS pr ON c.iin_clean = pr.taxpayer_iin_bin
     LEFT JOIN beneficiary_names AS bn ON c.iin_clean = bn.taxpayer_iin_bin
@@ -265,24 +298,29 @@ base AS (
         SELECT
             k.taxpayer_iin_bin AS taxpayer_iin_bin,
             k.iin_clean AS iin_clean,
-            -- Ключ сведения: настоящий ИИН, а при его отсутствии — «нерезидент»
-            -- с именем. Одно только слово «нерезидент» склеило бы разных
-            -- иностранцев одной компании в одну строку.
-            {key_expr} AS benefeciary_iin_bin,
+            -- Ключ сведения — служебный. Настоящий ИИН, а при его отсутствии
+            -- «нерезидент» с именем: одно только слово «нерезидент» склеило бы
+            -- разных иностранцев одной компании в одну строку. В поле ИИН этот
+            -- ключ не показывается, для показа есть benefeciary_iin_bin ниже.
+            {key_expr} AS benefeciary_key,
             k.benefeciary_name AS benefeciary_name,
+            -- Признак нерезидента: своего ИИН нет либо он выдан иностранцу
+            (k.iin_clean = ''
+                OR right(left(k.iin_clean, 5), 1) = '5'
+                OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
+                    AND right(left(k.iin_clean, 7), 1) = '0')) AS is_nonresident,
             -- Порядок важен. Сначала юрлицо: если после раскрутки ИИН всё ещё
             -- принадлежит организации, цепочка не сошлась. Затем нерезидент:
             -- нет настоящего ИИН — значит казахстанского номера у лица нет.
             -- Тип БС в обоих случаях сохраняется.
             if({is_ul_expr},
                 {unresolved_status_expr},
-                if(k.iin_clean = '',
+                if(k.iin_clean = ''
+                    OR right(left(k.iin_clean, 5), 1) = '5'
+                    OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
+                        AND right(left(k.iin_clean, 7), 1) = '0'),
                     {nonresident_status_expr},
-                    if(right(left(k.iin_clean, 5), 1) = '5'
-                        OR (right(left(k.iin_clean, 5), 1) IN ('1', '2', '3')
-                            AND right(left(k.iin_clean, 7), 1) = '0'),
-                        {nonresident_status_expr},
-                        k.status))) AS status,
+                    k.status)) AS status,
             k.algorithm_code AS algorithm_code,
             k.priority AS priority,
             k.`_actual_date` AS _actual_date,
@@ -297,11 +335,11 @@ base AS (
 algo AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.benefeciary_key AS benefeciary_key,
         b.algorithm_code AS algorithm_code,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
 ),
 ball1_t AS (
     SELECT taxpayer_iin_bin, sum(priority) AS ball1
@@ -309,9 +347,9 @@ ball1_t AS (
     GROUP BY taxpayer_iin_bin
 ),
 ball2_t AS (
-    SELECT taxpayer_iin_bin, benefeciary_iin_bin, sum(priority) AS ball2
+    SELECT taxpayer_iin_bin, benefeciary_key, sum(priority) AS ball2
     FROM algo
-    GROUP BY taxpayer_iin_bin, benefeciary_iin_bin
+    GROUP BY taxpayer_iin_bin, benefeciary_key
 ),
 -- Справочники сворачиваются до одной строки на идентификатор,
 -- иначе LEFT JOIN размножит строки реестра
@@ -353,7 +391,9 @@ shares AS (
 pairs AS (
     SELECT
         n.taxpayer_iin_bin AS taxpayer_iin_bin,
-        n.benefeciary_iin_bin AS benefeciary_iin_bin,
+        n.benefeciary_key AS benefeciary_key,
+        any(n.iin_clean) AS iin_clean,
+        max(n.is_nonresident) AS is_nonresident,
         -- при нескольких сработавших алгоритмах побеждает статус с наименьшим
         -- баллом: регистрационный (priority 0) важнее предполагаемого
         argMin(n.status, n.priority) AS status,
@@ -366,12 +406,16 @@ pairs AS (
         min(n.priority) AS min_priority,
         max(n.`_actual_date`) AS _actual_date
     FROM base AS n
-    GROUP BY n.taxpayer_iin_bin, n.benefeciary_iin_bin
+    GROUP BY n.taxpayer_iin_bin, n.benefeciary_key
 )
 SELECT
     pr.taxpayer_iin_bin AS taxpayer_iin_bin,
     COALESCE(comp.company_name, '') AS taxpayer_name,
-    pr.benefeciary_iin_bin AS benefeciary_iin_bin,
+    -- Служебный ключ: по нему строятся ссылки и сведение
+    pr.benefeciary_key AS benefeciary_key,
+    -- В поле ИИН только номер, слово «нерезидент» либо пусто
+    {display_iin_expr} AS benefeciary_iin_bin,
+    pr.is_nonresident AS is_nonresident,
     pr.benefeciary_name AS benefeciary_name,
     -- Статус уже уточнён в base: там известен настоящий ИИН, до того как
     -- он подменяется ключом «нерезидент: …». Здесь берётся готовое значение
@@ -392,13 +436,13 @@ SELECT
 FROM pairs pr
 LEFT JOIN ball1_t b1 ON pr.taxpayer_iin_bin = b1.taxpayer_iin_bin
 LEFT JOIN ball2_t b2 ON pr.taxpayer_iin_bin = b2.taxpayer_iin_bin
-    AND pr.benefeciary_iin_bin = b2.benefeciary_iin_bin
+    AND pr.benefeciary_key = b2.benefeciary_key
 LEFT JOIN companies comp ON pr.taxpayer_iin_bin = comp.taxpayer_iin_bin
 LEFT JOIN ownership own ON pr.taxpayer_iin_bin = own.taxpayer_iin_bin
-LEFT JOIN documents doc ON pr.benefeciary_iin_bin = doc.taxpayer_iin_bin
-LEFT JOIN shares sh ON pr.benefeciary_iin_bin = sh.holder_iin_bin
+LEFT JOIN documents doc ON pr.iin_clean = doc.taxpayer_iin_bin
+LEFT JOIN shares sh ON pr.iin_clean = sh.holder_iin_bin
 -- Фильтр из ТЗ: исключаются строки, где пуст и ИИН, и имя бенефициара
-WHERE NOT (pr.benefeciary_iin_bin = '' AND pr.benefeciary_name = '')
+WHERE NOT (pr.benefeciary_key = '' AND pr.benefeciary_name = '')
 {having}
 {limit_clause}
 """.strip()
@@ -418,37 +462,29 @@ def build_company_summary_sql(
     """
     union_sql = build_union_sql(result_tables)
     where_clause = f"WHERE {company_filter}" if company_filter else ""
+    keyed_sql = build_keyed_union_sql(
+        union_sql, ["algorithm_code", "priority"], where=where_clause
+    )
     return f"""
 WITH base AS (
-    -- Приведение типов уже сделано в объединении, повторять его здесь нельзя:
-    -- «toString(x) AS x» новый анализатор ClickHouse принимает за ссылку
-    -- на создаваемый псевдоним и запрос падает
-    SELECT DISTINCT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
-        algorithm_code,
-        priority
-    FROM (
-{union_sql}
-    )
-    {where_clause}
+{keyed_sql}
 ),
 algo AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.benefeciary_key AS benefeciary_key,
         b.algorithm_code AS algorithm_code,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
 ),
 ball2_t AS (
     SELECT
         a.taxpayer_iin_bin AS taxpayer_iin_bin,
-        a.benefeciary_iin_bin AS benefeciary_iin_bin,
+        a.benefeciary_key AS benefeciary_key,
         sum(a.priority) AS ball2
     FROM algo AS a
-    GROUP BY a.taxpayer_iin_bin, a.benefeciary_iin_bin
+    GROUP BY a.taxpayer_iin_bin, a.benefeciary_key
 ),
 ball1_t AS (
     SELECT a.taxpayer_iin_bin AS taxpayer_iin_bin, sum(a.priority) AS ball1
@@ -457,7 +493,7 @@ ball1_t AS (
 )
 SELECT
     b2.taxpayer_iin_bin AS taxpayer_iin_bin,
-    count(DISTINCT b2.benefeciary_iin_bin) AS beneficiary_count,
+    count(DISTINCT b2.benefeciary_key) AS beneficiary_count,
     max(if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2))) AS max_ball3
 FROM ball2_t b2
 LEFT JOIN ball1_t b1 ON b2.taxpayer_iin_bin = b1.taxpayer_iin_bin
@@ -468,26 +504,22 @@ GROUP BY b2.taxpayer_iin_bin
 def build_stats_sql(result_tables: Iterable[str]) -> str:
     """Общая статистика реестра для /api/stats."""
     union_sql = build_union_sql(result_tables)
+    keyed_sql = build_keyed_union_sql(
+        union_sql, ["status", "algorithm_code", "priority"]
+    )
     return f"""
 WITH base AS (
-    SELECT DISTINCT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
-        status,
-        algorithm_code,
-        priority
-    FROM (
-{union_sql}
-    )
-    WHERE NOT (benefeciary_iin_bin = '' AND status = '')
+{keyed_sql}
 )
 SELECT
     count() AS total_rows,
     uniqExact(b.taxpayer_iin_bin) AS company_count,
-    uniqExact(b.benefeciary_iin_bin) AS beneficiary_count,
-    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE 'Регистрационный%') AS registration_count,
-    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE 'Предполагаемый%') AS assumed_count,
-    uniqExactIf(b.benefeciary_iin_bin, b.status LIKE '%нерезидент%') AS nonresident_count
+    uniqExact(b.benefeciary_key) AS beneficiary_count,
+    uniqExactIf(b.benefeciary_key, b.status LIKE 'Регистрационный%') AS registration_count,
+    uniqExactIf(b.benefeciary_key, b.status LIKE 'Предполагаемый%') AS assumed_count,
+    -- Нерезидент опознаётся по отсутствию настоящего ИИН, а не по тексту
+    -- статуса: пометка проставляется позже, при сборке реестра
+    uniqExactIf(b.benefeciary_key, b.iin_clean = '') AS nonresident_count
 FROM base AS b
 """.strip()
 
@@ -495,22 +527,16 @@ FROM base AS b
 def build_stats_by_algorithm_sql(result_tables: Iterable[str]) -> str:
     """Разрез статистики по алгоритмам."""
     union_sql = build_union_sql(result_tables)
+    keyed_sql = build_keyed_union_sql(union_sql, ["algorithm_code", "priority"])
     return f"""
 SELECT
     d.algorithm_code AS algorithm_code,
     any(d.priority) AS priority,
     uniqExact(d.taxpayer_iin_bin) AS company_count,
-    uniqExact(d.benefeciary_iin_bin) AS beneficiary_count,
+    uniqExact(d.benefeciary_key) AS beneficiary_count,
     count() AS row_count
 FROM (
-    SELECT DISTINCT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
-        algorithm_code,
-        priority
-    FROM (
-{union_sql}
-    )
+{keyed_sql}
 ) AS d
 GROUP BY d.algorithm_code
 ORDER BY d.algorithm_code

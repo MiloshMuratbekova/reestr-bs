@@ -145,10 +145,10 @@ function BeneficiariesBlock({ card, onExplain, explainingIin }) {
           <div className="space-y-3">
             {beneficiaries.map((item, index) => (
               <BeneficiaryCard
-                key={`${item.benefeciary_iin_bin}-${index}`}
+                key={`${item.benefeciary_key}-${index}`}
                 item={item}
                 onExplain={onExplain}
-                explaining={explainingIin === item.benefeciary_iin_bin}
+                explaining={explainingIin === item.benefeciary_key}
               />
             ))}
           </div>
@@ -424,9 +424,9 @@ export default function CompanyPage() {
   }, [bin])
 
   const explainBeneficiary = async (item) => {
-    setExplainingIin(item.benefeciary_iin_bin)
+    setExplainingIin(item.benefeciary_key)
     try {
-      const { data } = await registryApi.explain(bin, item.benefeciary_iin_bin)
+      const { data } = await registryApi.explain(bin, item.benefeciary_key)
       setExplanation(data.explanation)
       window.scrollTo({ top: document.body.scrollHeight / 2, behavior: 'smooth' })
     } catch (err) {

@@ -287,7 +287,8 @@ async def list_beneficiaries(
 
     if query:
         conditions.append(
-            "(positionCaseInsensitive(r.benefeciary_iin_bin, {q:String}) > 0"
+            "(positionCaseInsensitive(r.iin_clean, {q:String}) > 0"
+            " OR positionCaseInsensitive(r.benefeciary_key, {q:String}) > 0"
             " OR positionCaseInsensitive(r.benefeciary_name, {q:String}) > 0)"
         )
         params["q"] = query.strip()
@@ -332,7 +333,12 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
     """Профиль бенефициара и все компании, где он выявлен."""
     tables = await algorithm_service.active_result_tables(session)
     if not tables:
-        return {"benefeciary_iin_bin": iin, "benefeciary_name": "", "companies": []}
+        return {
+            "benefeciary_key": iin,
+            "benefeciary_iin_bin": "",
+            "benefeciary_name": "",
+            "companies": [],
+        }
 
     # Здесь отбор идёт по бенефициару, поэтому подстановка ЮЛ→ФЛ не
     # применяется: она меняет как раз то поле, по которому фильтруем, и
@@ -340,7 +346,7 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
     # по тому идентификатору, который выдали алгоритмы.
     sql = build_registry_sql(
         tables,
-        company_filter="benefeciary_iin_bin = {iin:String}",
+        company_filter="benefeciary_key = {iin:String}",
         category_source=registry_service.category_source(),
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
     )
@@ -352,7 +358,13 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
         key=lambda r: (-float(r.get("ball3") or 0), str(r.get("taxpayer_name") or "")),
     )
     return {
-        "benefeciary_iin_bin": iin,
+        "benefeciary_key": iin,
+        # Показанный ИИН берётся из самих строк: там он уже приведён
+        # к виду «номер, слово нерезидент или пусто»
+        "benefeciary_iin_bin": next(
+            (r.get("benefeciary_iin_bin") for r in rows
+             if r.get("benefeciary_iin_bin")), ""
+        ),
         "benefeciary_name": name,
         "company_count": len({r.get("taxpayer_iin_bin") for r in rows}),
         "max_ball3": round(max((float(r.get("ball3") or 0) for r in rows), default=0.0), 2),
@@ -492,7 +504,7 @@ async def _company_graph(
     if not company.get("is_state_owned"):
         beneficiaries = await registry_service.get_beneficiaries(session, bin_value)
         for row in beneficiaries:
-            beneficiary_id = row.get("benefeciary_iin_bin") or row.get("benefeciary_name") or ""
+            beneficiary_id = row.get("benefeciary_key") or row.get("benefeciary_name") or ""
             if not beneficiary_id:
                 continue
             _node(

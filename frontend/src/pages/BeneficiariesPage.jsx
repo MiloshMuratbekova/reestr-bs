@@ -377,9 +377,9 @@ export default function BeneficiariesPage() {
                   const style = riskStyle(item.max_ball3)
                   return (
                     <tr
-                      key={item.benefeciary_iin_bin}
+                      key={item.benefeciary_key}
                       className="cursor-pointer"
-                      onClick={() => setSelected(item.benefeciary_iin_bin)}
+                      onClick={() => setSelected(item.benefeciary_key)}
                     >
                       <td className="font-medium text-slate-800">
                         {value(item.benefeciary_name)}

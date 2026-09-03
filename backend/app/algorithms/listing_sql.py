@@ -19,6 +19,7 @@ from typing import Iterable, List, Optional
 from app.algorithms import cleaning
 from app.algorithms.registry_sql import (
     DOP_INFO_FIRST_PART_ALGORITHMS,
+    build_keyed_union_sql,
     build_union_sql,
 )
 from app.core.config import settings
@@ -38,7 +39,7 @@ COMPANY_SORT_COLUMNS = {
 #: То же для списка бенефициаров
 BENEFICIARY_SORT_COLUMNS = {
     "benefeciary_name": "r.benefeciary_name",
-    "benefeciary_iin_bin": "r.benefeciary_iin_bin",
+    "benefeciary_iin_bin": "r.benefeciary_key",
     "status": "r.status",
     "company_count": "r.company_count",
     "max_ball3": "r.max_ball3",
@@ -61,9 +62,7 @@ def _scored_cte(result_tables: Iterable[str], *, with_details: bool) -> str:
         f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS
     )
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
-    dop_name = cleaning.name_from_dop(
-        "u.dop_info", "u.algorithm_code", first_part_codes
-    )
+    dop_name = cleaning.display_name("u.dop_info")
     key = cleaning.beneficiary_key("iin_clean", "dop_name")
 
     details = ",\n        status,\n        dop_info" if with_details else ""
@@ -92,7 +91,8 @@ base AS (
     SELECT DISTINCT
         taxpayer_iin_bin,
         iin_clean,
-        {key} AS benefeciary_iin_bin,
+        -- Служебный ключ сведения; в поле ИИН он не показывается
+        {key} AS benefeciary_key,
         dop_name,
         algorithm_code,
         priority{details}
@@ -105,11 +105,11 @@ base AS (
 algo AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.benefeciary_key AS benefeciary_key,
         b.algorithm_code AS algorithm_code,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
 ),
 ball1_t AS (
     SELECT a.taxpayer_iin_bin AS taxpayer_iin_bin, sum(a.priority) AS ball1
@@ -119,15 +119,15 @@ ball1_t AS (
 ball2_t AS (
     SELECT
         a.taxpayer_iin_bin AS taxpayer_iin_bin,
-        a.benefeciary_iin_bin AS benefeciary_iin_bin,
+        a.benefeciary_key AS benefeciary_key,
         sum(a.priority) AS ball2
     FROM algo AS a
-    GROUP BY a.taxpayer_iin_bin, a.benefeciary_iin_bin
+    GROUP BY a.taxpayer_iin_bin, a.benefeciary_key
 ),
 scored AS (
     SELECT
         b2.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b2.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b2.benefeciary_key AS benefeciary_key,
         if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2)) AS ball3
     FROM ball2_t AS b2
     LEFT JOIN ball1_t AS b1 ON b2.taxpayer_iin_bin = b1.taxpayer_iin_bin
@@ -161,7 +161,7 @@ WITH {_scored_cte(result_tables, with_details=False)},
 summary AS (
     SELECT
         s.taxpayer_iin_bin AS taxpayer_iin_bin,
-        count(DISTINCT s.benefeciary_iin_bin) AS beneficiary_count,
+        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
         max(s.ball3) AS max_ball3
     FROM scored AS s
     GROUP BY s.taxpayer_iin_bin
@@ -235,25 +235,22 @@ def build_companies_enrich_sql(result_tables: Iterable[str]) -> str:
     Без ограничения по списку такой разрез пришлось бы считать по всему
     справочнику юридических лиц.
     """
+    keyed_sql = build_keyed_union_sql(
+        build_union_sql(result_tables),
+        ["algorithm_code", "priority"],
+        where="WHERE u.taxpayer_iin_bin IN {bins:Array(String)}",
+    )
     return f"""
 WITH base AS (
-    SELECT DISTINCT
-        taxpayer_iin_bin,
-        benefeciary_iin_bin,
-        algorithm_code,
-        priority
-    FROM (
-{build_union_sql(result_tables)}
-    )
-    WHERE taxpayer_iin_bin IN {{bins:Array(String)}}
+{keyed_sql}
 ),
 algo AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.benefeciary_key AS benefeciary_key,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin, b.algorithm_code
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
 ),
 ball1_t AS (
     SELECT a.taxpayer_iin_bin AS taxpayer_iin_bin, sum(a.priority) AS ball1
@@ -263,14 +260,14 @@ ball1_t AS (
 ball2_t AS (
     SELECT
         a.taxpayer_iin_bin AS taxpayer_iin_bin,
-        a.benefeciary_iin_bin AS benefeciary_iin_bin,
+        a.benefeciary_key AS benefeciary_key,
         sum(a.priority) AS ball2
     FROM algo AS a
-    GROUP BY a.taxpayer_iin_bin, a.benefeciary_iin_bin
+    GROUP BY a.taxpayer_iin_bin, a.benefeciary_key
 )
 SELECT
     b2.taxpayer_iin_bin AS taxpayer_iin_bin,
-    count(DISTINCT b2.benefeciary_iin_bin) AS beneficiary_count,
+    count(DISTINCT b2.benefeciary_key) AS beneficiary_count,
     max(if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2))) AS max_ball3
 FROM ball2_t AS b2
 LEFT JOIN ball1_t AS b1 ON b2.taxpayer_iin_bin = b1.taxpayer_iin_bin
@@ -301,6 +298,7 @@ def build_beneficiaries_list_sql(
     """
     sort_column = BENEFICIARY_SORT_COLUMNS.get(sort, "max_ball3")
     nonresident_status_expr = cleaning.nonresident_status("pp.status")
+    display_iin_expr = cleaning.display_iin("r.iin_clean", "r.is_nonresident")
     where_clause = ""
     if conditions:
         where_clause = "WHERE " + " AND ".join(conditions)
@@ -329,7 +327,7 @@ persons AS (
 per_pair AS (
     SELECT
         b.taxpayer_iin_bin AS taxpayer_iin_bin,
-        b.benefeciary_iin_bin AS benefeciary_iin_bin,
+        b.benefeciary_key AS benefeciary_key,
         any(b.iin_clean) AS iin_clean,
         argMin(b.status, b.priority) AS status,
         -- Пара (балл, имя) в ключе сравнения: при равных баллах победитель
@@ -339,12 +337,12 @@ per_pair AS (
         groupUniqArray(b.algorithm_code) AS algorithm_codes,
         min(b.priority) AS min_priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_iin_bin
+    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key
 ),
 pair_named AS (
     SELECT
         pp.taxpayer_iin_bin AS taxpayer_iin_bin,
-        pp.benefeciary_iin_bin AS benefeciary_iin_bin,
+        pp.benefeciary_key AS benefeciary_key,
         pp.iin_clean AS iin_clean,
         -- Нет настоящего ИИН — лицо нерезидент. Тип БС сохраняется,
         -- добавляется только пометка. Те же правила в карточке компании.
@@ -371,11 +369,12 @@ pair_named AS (
     LEFT JOIN beneficiary_names AS bn ON pp.iin_clean = bn.taxpayer_iin_bin
     LEFT JOIN scored AS sc
         ON pp.taxpayer_iin_bin = sc.taxpayer_iin_bin
-        AND pp.benefeciary_iin_bin = sc.benefeciary_iin_bin
+        AND pp.benefeciary_key = sc.benefeciary_key
 ),
 rolled AS (
     SELECT
-        pn.benefeciary_iin_bin AS benefeciary_iin_bin,
+        pn.benefeciary_key AS benefeciary_key,
+        any(pn.iin_clean) AS iin_clean,
         argMin(pn.benefeciary_name, (pn.min_priority, pn.benefeciary_name))
             AS benefeciary_name,
         argMin(pn.status, (pn.min_priority, pn.benefeciary_name)) AS status,
@@ -387,10 +386,12 @@ rolled AS (
         argMin(pn.dop_info, (pn.min_priority, pn.benefeciary_name)) AS dop_info,
         min(pn.min_priority) AS min_priority
     FROM pair_named AS pn
-    GROUP BY pn.benefeciary_iin_bin
+    GROUP BY pn.benefeciary_key
 )
 SELECT
-    r.benefeciary_iin_bin AS benefeciary_iin_bin,
+    r.benefeciary_key AS benefeciary_key,
+    -- В поле ИИН только номер, слово «нерезидент» либо пусто
+    {display_iin_expr} AS benefeciary_iin_bin,
     r.benefeciary_name AS benefeciary_name,
     r.status AS status,
     r.algorithm_codes AS algorithm_codes,
@@ -403,7 +404,7 @@ SELECT
     count() OVER () AS total_count
 FROM rolled AS r
 {where_clause}
-ORDER BY {sort_column} {_direction(order)}, r.benefeciary_iin_bin ASC
+ORDER BY {sort_column} {_direction(order)}, r.benefeciary_key ASC
 LIMIT {int(limit)} OFFSET {int(offset)}
 """.strip()
 
@@ -418,7 +419,7 @@ WITH {_scored_cte(result_tables, with_details=False)},
 per_company AS (
     SELECT
         s.taxpayer_iin_bin AS taxpayer_iin_bin,
-        count(DISTINCT s.benefeciary_iin_bin) AS beneficiary_count,
+        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
         max(s.ball3) AS max_ball3
     FROM scored AS s
     GROUP BY s.taxpayer_iin_bin
@@ -440,7 +441,7 @@ WITH {_scored_cte(result_tables, with_details=False)},
 per_company AS (
     SELECT
         s.taxpayer_iin_bin AS taxpayer_iin_bin,
-        count(DISTINCT s.benefeciary_iin_bin) AS beneficiary_count,
+        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
         max(s.ball3) AS max_ball3
     FROM scored AS s
     GROUP BY s.taxpayer_iin_bin
