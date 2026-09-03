@@ -353,9 +353,9 @@ export default function OwnershipPage() {
                       const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.founder
                       const midX = (from.x + to.x) / 2
                       const midY = (from.y + to.y) / 2
-                      const caption = [edge.share, edge.ball3 != null ? `${edge.ball3}%` : '']
-                        .filter(Boolean)
-                        .join(' · ')
+                      // Подпись ребра — только доля владения: вероятность
+                      // с экранов убрана
+                      const caption = [edge.share].filter(Boolean).join(' · ')
                       return (
                         <g key={`${edge.source}-${edge.target}-${edge.kind}-${index}`}>
                           <line

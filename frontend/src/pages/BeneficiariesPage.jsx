@@ -88,16 +88,6 @@ function ProfilePanel({ iin, onClose }) {
                     {number(profile.company_count)}
                   </div>
                 </div>
-                <div className="rounded-md bg-slate-50 px-4 py-3">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Макс. вероятность
-                  </div>
-                  <div
-                    className={`mt-1 text-xl font-semibold ${riskStyle(profile.max_ball3).text}`}
-                  >
-                    {Number(profile.max_ball3 || 0).toFixed(2)}%
-                  </div>
-                </div>
               </div>
 
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -107,13 +97,12 @@ function ProfilePanel({ iin, onClose }) {
               {profile.companies?.length ? (
                 <div className="space-y-2">
                   {profile.companies.map((row) => {
-                    const style = riskStyle(row.ball3)
                     return (
                       <button
-                        key={`${row.taxpayer_iin_bin}-${row.algorithms}`}
+                        key={`${row.taxpayer_key || row.taxpayer_iin_bin}-${row.algorithms}`}
                         type="button"
                         onClick={() =>
-                          navigate(`/company/${encodeURIComponent(row.taxpayer_iin_bin)}`)
+                          navigate(`/company/${encodeURIComponent(row.taxpayer_key || row.taxpayer_iin_bin)}`)
                         }
                         className="w-full rounded-md border border-slate-200 px-4 py-3 text-left transition-colors hover:bg-slate-50"
                       >
@@ -125,9 +114,6 @@ function ProfilePanel({ iin, onClose }) {
                             <div className="font-mono text-xs text-slate-500">
                               {value(row.taxpayer_iin_bin)}
                             </div>
-                          </div>
-                          <div className={`shrink-0 text-sm font-semibold ${style.text}`}>
-                            {Number(row.ball3 || 0).toFixed(2)}%
                           </div>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -362,19 +348,11 @@ export default function BeneficiariesPage() {
                     onSort={handleSort}
                     className="text-right"
                   />
-                  <SortHeader
-                    column="max_ball3"
-                    label="Вероятность"
-                    sort={sort}
-                    order={order}
-                    onSort={handleSort}
-                  />
                   <th className="text-center">Нерезидент</th>
                 </tr>
               </thead>
               <tbody>
                 {data.items.map((item) => {
-                  const style = riskStyle(item.max_ball3)
                   return (
                     <tr
                       key={item.benefeciary_key}
@@ -394,17 +372,6 @@ export default function BeneficiariesPage() {
                         <AlgorithmChips codes={item.algorithm_codes} />
                       </td>
                       <td className="text-right font-semibold">{number(item.company_count)}</td>
-                      <td className="w-44">
-                        <div className={`mb-1 text-xs font-semibold ${style.text}`}>
-                          {Number(item.max_ball3 || 0).toFixed(2)}%
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                          <div
-                            className={`h-full rounded-full ${style.bar}`}
-                            style={{ width: `${Math.min(100, Number(item.max_ball3) || 0)}%` }}
-                          />
-                        </div>
-                      </td>
                       <td className="text-center">{item.is_nonresident ? '🌐' : ''}</td>
                     </tr>
                   )

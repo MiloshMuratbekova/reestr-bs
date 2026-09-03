@@ -110,27 +110,6 @@ export function riskStyle(ball3) {
   return RISK_STYLES[riskTone(ball3)]
 }
 
-export function ProbabilityBar({ value: ball3, showLabel = true }) {
-  const score = Math.max(0, Math.min(100, Number(ball3) || 0))
-  const style = riskStyle(score)
-  return (
-    <div className="w-full">
-      {showLabel && (
-        <div className="mb-1 flex items-center justify-between text-xs">
-          <span className="text-slate-500">Вероятность</span>
-          <span className={`font-semibold ${style.text}`}>{score.toFixed(2)}%</span>
-        </div>
-      )}
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-        <div
-          className={`h-full rounded-full transition-all ${style.bar}`}
-          style={{ width: `${score}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
 /** Похож ли идентификатор на БИН организации.
  *
  * Признак из ТЗ: двенадцать цифр, пятый знак справа восьмизначной части

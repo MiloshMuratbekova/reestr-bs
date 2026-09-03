@@ -229,34 +229,60 @@ async def merged_table_if_usable() -> Optional[str]:
         return _merged_table
 
     _merged_checked = True
-    fqn = (settings.MERGED_TABLE or "").strip()
-    if not fqn or "." not in fqn:
-        return None
+    candidates = [
+        name.strip()
+        for name in (settings.MERGED_TABLE or "").split(",")
+        if name.strip() and "." in name
+    ]
+    for fqn in candidates:
+        database, table = fqn.split(".", 1)
+        try:
+            columns = await clickhouse.table_columns(database, table)
+        except ClickHouseError as exc:
+            logger.warning("Не удалось прочитать состав сводной таблицы %s: %s", fqn, exc)
+            continue
 
-    database, table = fqn.split(".", 1)
+        if not columns:
+            logger.info("Сводной таблицы %s нет", fqn)
+            continue
+
+        missing = REQUIRED_SOURCE_COLUMNS - columns
+        if missing:
+            logger.warning(
+                "Сводная таблица %s не подходит, не хватает полей: %s",
+                fqn,
+                ", ".join(sorted(missing)),
+            )
+            continue
+
+        logger.info("Сводная таблица %s взята основой реестра", fqn)
+        _merged_table = fqn
+        return _merged_table
+
+    logger.info(
+        "Подходящей сводной таблицы не нашлось (искали: %s) — "
+        "реестр читает только таблицы алгоритмов",
+        ", ".join(candidates) or "не задано",
+    )
+    return None
+
+
+async def named_result_tables() -> List[str]:
+    """Источники, у которых есть колонка ``taxpayer_name``.
+
+    Такая колонка есть только в сводной таблице. По ней различаются
+    иностранные организации: в поле БИН у них стоит одинаковый текст,
+    и без наименования все они слились бы в одну компанию.
+    """
+    merged = await merged_table_if_usable()
+    if not merged:
+        return []
+    database, table = merged.split(".", 1)
     try:
         columns = await clickhouse.table_columns(database, table)
-    except ClickHouseError as exc:
-        logger.warning("Не удалось прочитать состав сводной таблицы %s: %s", fqn, exc)
-        return None
-
-    if not columns:
-        logger.info("Сводной таблицы %s нет — реестр читает только алгоритмы", fqn)
-        return None
-
-    missing = REQUIRED_SOURCE_COLUMNS - columns
-    if missing:
-        logger.warning(
-            "Сводная таблица %s не подходит, не хватает полей: %s. "
-            "Реестр читает только таблицы алгоритмов",
-            fqn,
-            ", ".join(sorted(missing)),
-        )
-        return None
-
-    logger.info("Сводная таблица %s взята основой реестра", fqn)
-    _merged_table = fqn
-    return _merged_table
+    except ClickHouseError:
+        return []
+    return [merged] if "taxpayer_name" in columns else []
 
 
 async def active_result_tables(session: AsyncSession) -> List[str]:

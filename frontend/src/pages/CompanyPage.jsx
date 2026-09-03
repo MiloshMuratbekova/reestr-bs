@@ -9,7 +9,6 @@ import {
   Field,
   InfoMessage,
   Loading,
-  ProbabilityBar,
   Spinner,
   StatusBadge,
   riskStyle,
@@ -115,10 +114,6 @@ function BeneficiaryCard({ item, onExplain, explaining }) {
         </Field>
         <Field label="Документ">{value(item.document_info)}</Field>
       </dl>
-
-      <div className="mt-3">
-        <ProbabilityBar value={item.ball3} />
-      </div>
 
       {item.dop_info && (
         <div className="mt-3 rounded border border-white/60 bg-white/70 px-3 py-2 text-xs text-slate-700">

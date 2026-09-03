@@ -37,17 +37,15 @@ function TopTable({ title, rows, metric, onOpen }) {
             <tr>
               <th>Компания</th>
               <th className="w-24 text-right">БС</th>
-              <th className="w-40">Вероятность</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
-              const style = riskStyle(row.max_ball3)
               return (
                 <tr
-                  key={row.taxpayer_iin_bin}
+                  key={row.taxpayer_key || row.taxpayer_iin_bin}
                   className="cursor-pointer"
-                  onClick={() => onOpen(row.taxpayer_iin_bin)}
+                  onClick={() => onOpen(row.taxpayer_key || row.taxpayer_iin_bin)}
                 >
                   <td>
                     <div className="font-medium text-slate-800">{value(row.taxpayer_name)}</div>
@@ -57,17 +55,6 @@ function TopTable({ title, rows, metric, onOpen }) {
                   </td>
                   <td className="text-right font-semibold text-slate-800">
                     {number(row.beneficiary_count)}
-                  </td>
-                  <td>
-                    <div className={`mb-1 text-xs font-semibold ${style.text}`}>
-                      {Number(row.max_ball3 || 0).toFixed(2)}%
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                      <div
-                        className={`h-full rounded-full ${style.bar}`}
-                        style={{ width: `${Math.min(100, Number(row.max_ball3) || 0)}%` }}
-                      />
-                    </div>
                   </td>
                 </tr>
               )
@@ -215,7 +202,6 @@ export default function DashboardPage() {
             <TopTable
               title="Топ-10 компаний по уровню риска"
               rows={stats?.top_by_risk}
-              metric="максимальная вероятность (ball3)"
               onOpen={openCompany}
             />
           </>

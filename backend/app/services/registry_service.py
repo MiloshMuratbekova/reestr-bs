@@ -189,7 +189,8 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
     # в самом SQL, а не на стороне интерфейса
     sql = build_registry_sql(
         tables,
-        company_filter="taxpayer_iin_bin = {bin:String}",
+        named_tables=await algorithm_service.named_result_tables(),
+        company_filter="taxpayer_key = {bin:String}",
         category_source=_category_source,
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
         resolution_map=await algorithm_service.resolution_map_if_ready(tables),
@@ -216,7 +217,10 @@ async def company_outside_dictionary(
         return None
 
     summary = await clickhouse.fetch_one(
-        build_company_summary_sql(tables, "taxpayer_iin_bin = {bin:String}"),
+        build_company_summary_sql(
+            tables, "taxpayer_key = {bin:String}",
+            named_tables=await algorithm_service.named_result_tables(),
+        ),
         {"bin": bin_value},
     )
     if not summary:
@@ -225,7 +229,8 @@ async def company_outside_dictionary(
     name = ""
     try:
         row = await clickhouse.fetch_one(
-            build_company_name_fallback_sql(tables), {"bin": bin_value}
+            build_company_name_fallback_sql(tables, await algorithm_service.named_result_tables()),
+            {"bin": bin_value}
         )
         name = str((row or {}).get("taxpayer_name") or "")
     except ClickHouseError as exc:
@@ -350,7 +355,10 @@ async def search_companies(
         conditions = ["taxpayer_iin_bin IN {bins:Array(String)}"]
         if algorithm_filter:
             conditions.append("algorithm_code = {algo:String}")
-        summary_sql = build_company_summary_sql(tables, " AND ".join(conditions))
+        summary_sql = build_company_summary_sql(
+            tables, " AND ".join(conditions),
+            named_tables=await algorithm_service.named_result_tables(),
+        )
         params: Dict[str, Any] = {"bins": bins}
         if algorithm_filter:
             params["algo"] = algorithm_filter
@@ -431,8 +439,8 @@ async def get_stats(session: AsyncSession) -> Dict[str, Any]:
             "algorithms_calculated": 0,
         }
 
-    totals = await clickhouse.fetch_one(build_stats_sql(tables)) or {}
-    by_algorithm = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables))
+    totals = await clickhouse.fetch_one(build_stats_sql(tables, await algorithm_service.named_result_tables())) or {}
+    by_algorithm = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables, await algorithm_service.named_result_tables()))
 
     algorithms = await algorithm_service.list_algorithms(session)
     hints = {a.code: a.name for a in algorithms}
@@ -459,7 +467,8 @@ async def explain_empty(session: AsyncSession, bin_value: str) -> Optional[str]:
 
     try:
         row = await clickhouse.fetch_one(
-            build_empty_reason_sql(tables), {"bin": bin_value}
+            build_empty_reason_sql(tables, await algorithm_service.named_result_tables()),
+            {"bin": bin_value}
         )
     except ClickHouseError as exc:
         logger.warning("Не удалось объяснить пустую карточку %s: %s", bin_value, exc)

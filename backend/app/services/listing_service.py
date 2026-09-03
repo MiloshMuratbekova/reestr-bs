@@ -142,8 +142,10 @@ async def list_companies(
     if sort not in COMPANY_SORT_COLUMNS:
         sort = "max_ball3"
 
+    named = await algorithm_service.named_result_tables()
     sql = build_companies_list_sql(
-        tables, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
+        tables,
+        named_tables=named, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
     )
     rows = await clickhouse.fetch_all(sql, params)
 
@@ -234,7 +236,8 @@ async def _list_companies_from_dictionary(
         if tables:
             try:
                 for row in await clickhouse.fetch_all(
-                    build_companies_enrich_sql(tables), {"bins": bins}
+                    build_companies_enrich_sql(tables, await algorithm_service.named_result_tables()),
+                    {"bins": bins}
                 ):
                     summary[row["taxpayer_iin_bin"]] = row
             except ClickHouseError as exc:
@@ -311,8 +314,10 @@ async def list_beneficiaries(
     if sort not in BENEFICIARY_SORT_COLUMNS:
         sort = "max_ball3"
 
+    named = await algorithm_service.named_result_tables()
     sql = build_beneficiaries_list_sql(
-        tables, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
+        tables,
+        named_tables=named, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
     )
     rows = await clickhouse.fetch_all(sql, params)
 
@@ -346,6 +351,7 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
     # по тому идентификатору, который выдали алгоритмы.
     sql = build_registry_sql(
         tables,
+        named_tables=await algorithm_service.named_result_tables(),
         company_filter="benefeciary_key = {iin:String}",
         category_source=registry_service.category_source(),
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
@@ -742,7 +748,7 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
             return payload
 
         try:
-            summary = await clickhouse.fetch_one(build_dashboard_summary_sql(tables)) or {}
+            summary = await clickhouse.fetch_one(build_dashboard_summary_sql(tables, await algorithm_service.named_result_tables())) or {}
             payload.update(
                 {
                     "companies_with_bs": int(summary.get("companies_with_bs") or 0),
@@ -756,7 +762,7 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
 
         for key, by in (("top_by_beneficiaries", "count"), ("top_by_risk", "risk")):
             try:
-                rows = await clickhouse.fetch_all(build_top_companies_sql(tables, by=by, limit=10))
+                rows = await clickhouse.fetch_all(build_top_companies_sql(tables, by=by, limit=10, named_tables=await algorithm_service.named_result_tables()))
                 for row in rows:
                     row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
                     row["region"] = row.get("code_nd") or ""

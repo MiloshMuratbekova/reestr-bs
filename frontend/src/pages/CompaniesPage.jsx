@@ -274,18 +274,10 @@ export default function CompaniesPage() {
                         onSort={handleSort}
                         className="text-right"
                       />
-                      <SortHeader
-                        column="max_ball3"
-                        label="Вероятность"
-                        sort={sort}
-                        order={order}
-                        onSort={handleSort}
-                      />
                     </>
                   ) : (
                     <>
                       <th className="text-right">БС</th>
-                      <th>Вероятность</th>
                     </>
                   )}
                   <SortHeader
@@ -302,10 +294,10 @@ export default function CompaniesPage() {
                   const style = riskStyle(item.max_ball3)
                   return (
                     <tr
-                      key={item.taxpayer_iin_bin}
+                      key={item.taxpayer_key || item.taxpayer_iin_bin}
                       className="cursor-pointer"
                       onClick={() =>
-                        navigate(`/company/${encodeURIComponent(item.taxpayer_iin_bin)}`)
+                        navigate(`/company/${encodeURIComponent(item.taxpayer_key || item.taxpayer_iin_bin)}`)
                       }
                     >
                       <td className="whitespace-nowrap font-mono text-xs">
@@ -325,17 +317,6 @@ export default function CompaniesPage() {
                         {value(item.ownership_type)}
                       </td>
                       <td className="text-right font-semibold">{number(item.beneficiary_count)}</td>
-                      <td className="w-44">
-                        <div className={`mb-1 text-xs font-semibold ${style.text}`}>
-                          {Number(item.max_ball3 || 0).toFixed(2)}%
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                          <div
-                            className={`h-full rounded-full ${style.bar}`}
-                            style={{ width: `${Math.min(100, Number(item.max_ball3) || 0)}%` }}
-                          />
-                        </div>
-                      </td>
                       <td className="whitespace-nowrap">{value(item.reg_start_date)}</td>
                     </tr>
                   )

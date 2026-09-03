@@ -174,7 +174,7 @@ async def _fetch_rows(
         )
 
     if template.key == "algorithms":
-        rows = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables))
+        rows = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables, await algorithm_service.named_result_tables()))
         names = {a.code: a.name for a in await algorithm_service.list_algorithms(session)}
         for row in rows:
             row["name"] = names.get(row.get("algorithm_code", ""), "")
@@ -195,6 +195,7 @@ async def _fetch_rows(
 
     sql = build_registry_sql(
         tables,
+        named_tables=await algorithm_service.named_result_tables(),
         category_source=registry_service.category_source(),
         extra_conditions=extra or None,
         row_limit=limit,

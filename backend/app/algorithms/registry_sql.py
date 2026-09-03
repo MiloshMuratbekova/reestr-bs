@@ -34,8 +34,15 @@ from app.core.config import settings
 DOP_INFO_FIRST_PART_ALGORITHMS = ("БС-7", "БС-14", "БС-17")
 
 
-def build_union_sql(result_tables: Iterable[str]) -> str:
+def build_union_sql(
+    result_tables: Iterable[str], named_tables: Iterable[str] = ()
+) -> str:
     """UNION ALL по таблицам результатов алгоритмов — семь полей из ТЗ.
+
+    :param named_tables: таблицы, у которых есть колонка ``taxpayer_name``.
+        Ею различаются иностранные организации: в сводной таблице у них
+        вместо БИН стоит одинаковый текст «Иностранная компания», и без
+        наименования все они слились бы в одну.
 
     Типы приводятся к общему виду: _actual_date в таблицах алгоритмов
     встречается и строкой, и датой; priority — целым разной ширины.
@@ -59,11 +66,22 @@ def build_union_sql(result_tables: Iterable[str]) -> str:
     if not tables:
         raise ValueError("Нет ни одной активной таблицы результатов алгоритмов")
 
+    # Наименование компании есть только в сводной таблице; у таблиц отдельных
+    # алгоритмов такой колонки нет, и спрашивать её у них нельзя — запрос
+    # упадёт на разборе. Для них подставляется пустая строка.
+    named = {t for t in named_tables if t}
+
     parts: List[str] = []
     for table in tables:
+        taxpayer_name = (
+            "ifNull(toString(src.taxpayer_name), '')"
+            if table in named
+            else "''"
+        )
         parts.append(
             f"""    SELECT
         ifNull(toString(src.taxpayer_iin_bin), '') AS taxpayer_iin_bin,
+        {taxpayer_name} AS taxpayer_name,
         ifNull(toString(src.benefeciary_iin_bin), '') AS benefeciary_iin_bin,
         ifNull(toString(src.status), '') AS status,
         ifNull(toString(src.algorithm_code), '') AS algorithm_code,
@@ -86,19 +104,24 @@ def build_keyed_union_sql(
     Числа на дашборде тогда не сходятся с содержимым карточек.
     """
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    bin_clean = cleaning.clean_bin("u.taxpayer_iin_bin")
     name = cleaning.display_name("u.dop_info")
     key = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
+    company = cleaning.company_key("k.bin_clean", "k.taxpayer_name")
     inner = "".join(f"        u.{column} AS {column},\n" for column in passthrough)
     outer = "".join(f"        k.{column} AS {column},\n" for column in passthrough)
     return f"""    SELECT DISTINCT
-        k.taxpayer_iin_bin AS taxpayer_iin_bin,
+        {company} AS taxpayer_key,
+        k.bin_clean AS bin_clean,
+        k.taxpayer_name AS taxpayer_name,
         {key} AS benefeciary_key,
         k.iin_clean AS iin_clean,
         k.benefeciary_name AS benefeciary_name,
 {outer}        1 AS _keyed
     FROM (
         SELECT
-            u.taxpayer_iin_bin AS taxpayer_iin_bin,
+            {bin_clean} AS bin_clean,
+            u.taxpayer_name AS taxpayer_name,
             {iin_clean} AS iin_clean,
             {name} AS benefeciary_name,
 {inner}        1 AS _raw
@@ -114,6 +137,7 @@ def build_keyed_union_sql(
 def build_registry_sql(
     result_tables: Iterable[str],
     *,
+    named_tables: Iterable[str] = (),
     company_filter: Optional[str] = None,
     category_source: str = "ownership",
     extra_conditions: Optional[List[str]] = None,
@@ -133,7 +157,7 @@ def build_registry_sql(
         по системному словарю ClickHouse.
     :param extra_conditions: дополнительные условия на итоговую выборку
     """
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
 
     first_part_list = ", ".join(f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS)
 
@@ -203,8 +227,13 @@ def build_registry_sql(
     nonresident_status_expr = cleaning.nonresident_status("k.status")
     unresolved_status_expr = cleaning.unresolved_ul_status("k.status")
     display_name_expr = cleaning.display_name("c.dop_info")
-    display_iin_expr = cleaning.display_iin("pr.iin_clean", "pr.is_nonresident")
+    display_iin_expr = cleaning.display_iin_with_id(
+        "pr.iin_clean", "pr.is_nonresident", "pr.dop_info"
+    )
     is_ul_expr = cleaning.IS_UL.format(col="k.iin_clean")
+    clean_bin_expr = cleaning.clean_bin("r.taxpayer_iin_bin")
+    company_key_expr = cleaning.company_key("c.bin_clean", "c.taxpayer_name")
+    display_bin_expr = cleaning.display_company_bin("pr.bin_clean")
     persons_table = settings.DICT_PERSONS
     companies_table = settings.DICT_COMPANIES
 
@@ -212,8 +241,15 @@ def build_registry_sql(
     # бенефициара, но никогда не трогает taxpayer_iin_bin. Для карточки
     # компании это решающее — иначе пришлось бы разворачивать весь реестр.
     prefilter = ""
-    if company_filter and "benefeciary_iin_bin" not in company_filter:
-        prefilter = f"WHERE {company_filter}"
+    if company_filter and "taxpayer_key" in company_filter:
+        # У иностранных организаций в сыром поле стоит одинаковый текст,
+        # а ключ собирается позже, из наименования. Поэтому здесь они
+        # пропускаются все, а нужную выберет условие по ключу в base.
+        raw_filter = company_filter.replace("taxpayer_key", "taxpayer_iin_bin")
+        prefilter = (
+            f"WHERE ({raw_filter})"
+            f" OR taxpayer_iin_bin = '{cleaning.FOREIGN_COMPANY}'"
+        )
 
     # Ограничение числа строк ставится в самом запросе: даже если клиент
     # попросит больше, до него дойдёт только разрешённое количество
@@ -223,6 +259,7 @@ def build_registry_sql(
 WITH raw AS (
     SELECT DISTINCT
         taxpayer_iin_bin,
+        taxpayer_name,
         benefeciary_iin_bin,
         status,
         algorithm_code,
@@ -239,7 +276,8 @@ WITH raw AS (
 -- служит ключом сведения.
 cleaned AS (
     SELECT
-        r.taxpayer_iin_bin AS taxpayer_iin_bin,
+        {clean_bin_expr} AS bin_clean,
+        r.taxpayer_name AS taxpayer_name,
         {clean_iin_expr} AS iin_clean,
         r.status AS status,
         r.algorithm_code AS algorithm_code,
@@ -273,7 +311,11 @@ beneficiary_names AS (
 -- перестали бы сходиться с показанными строками.
 keyed AS (
     SELECT
-        c.taxpayer_iin_bin AS taxpayer_iin_bin,
+        c.bin_clean AS bin_clean,
+        c.taxpayer_name AS taxpayer_name,
+        -- Ключ компании: БИН, а у иностранной — слово с наименованием.
+        -- Одно только слово склеило бы все иностранные организации в одну.
+        {company_key_expr} AS taxpayer_key,
         c.iin_clean AS iin_clean,
         c.status AS status,
         c.algorithm_code AS algorithm_code,
@@ -296,7 +338,12 @@ keyed AS (
 base AS (
     SELECT * FROM (
         SELECT
-            k.taxpayer_iin_bin AS taxpayer_iin_bin,
+            k.bin_clean AS bin_clean,
+            -- Настоящий БИН доступен и под прежним именем: по нему можно
+            -- отбирать компанию, не зная служебного ключа
+            k.bin_clean AS taxpayer_iin_bin,
+            k.taxpayer_name AS taxpayer_name,
+            k.taxpayer_key AS taxpayer_key,
             k.iin_clean AS iin_clean,
             -- Ключ сведения — служебный. Настоящий ИИН, а при его отсутствии
             -- «нерезидент» с именем: одно только слово «нерезидент» склеило бы
@@ -334,22 +381,22 @@ base AS (
 -- Один балл на сочетание «пара + алгоритм»
 algo AS (
     SELECT
-        b.taxpayer_iin_bin AS taxpayer_iin_bin,
+        b.taxpayer_key AS taxpayer_key,
         b.benefeciary_key AS benefeciary_key,
         b.algorithm_code AS algorithm_code,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
+    GROUP BY b.taxpayer_key, b.benefeciary_key, b.algorithm_code
 ),
 ball1_t AS (
-    SELECT taxpayer_iin_bin, sum(priority) AS ball1
+    SELECT taxpayer_key, sum(priority) AS ball1
     FROM algo
-    GROUP BY taxpayer_iin_bin
+    GROUP BY taxpayer_key
 ),
 ball2_t AS (
-    SELECT taxpayer_iin_bin, benefeciary_key, sum(priority) AS ball2
+    SELECT taxpayer_key, benefeciary_key, sum(priority) AS ball2
     FROM algo
-    GROUP BY taxpayer_iin_bin, benefeciary_key
+    GROUP BY taxpayer_key, benefeciary_key
 ),
 -- Справочники сворачиваются до одной строки на идентификатор,
 -- иначе LEFT JOIN размножит строки реестра
@@ -359,7 +406,7 @@ companies AS (
         any(c.taxpayer_name) AS company_name,
         any(c.category) AS category
     FROM {settings.DICT_COMPANIES} AS c
-    WHERE c.taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
+    WHERE c.taxpayer_iin_bin IN (SELECT bin_clean FROM base WHERE bin_clean != '')
     GROUP BY c.taxpayer_iin_bin
 ),
 ownership AS (
@@ -367,7 +414,7 @@ ownership AS (
         o.taxpayer_iin_bin AS taxpayer_iin_bin,
         any(o.ownership_type) AS ownership_type{ownership_category_select}
     FROM {settings.DICT_OWNERSHIP} AS o
-    WHERE o.taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM base)
+    WHERE o.taxpayer_iin_bin IN (SELECT bin_clean FROM base WHERE bin_clean != '')
     GROUP BY o.taxpayer_iin_bin
 ),
 documents AS (
@@ -390,7 +437,9 @@ shares AS (
 ),
 pairs AS (
     SELECT
-        n.taxpayer_iin_bin AS taxpayer_iin_bin,
+        n.taxpayer_key AS taxpayer_key,
+        any(n.bin_clean) AS bin_clean,
+        argMin(n.taxpayer_name, (n.priority, n.taxpayer_name)) AS source_company_name,
         n.benefeciary_key AS benefeciary_key,
         any(n.iin_clean) AS iin_clean,
         max(n.is_nonresident) AS is_nonresident,
@@ -406,11 +455,17 @@ pairs AS (
         min(n.priority) AS min_priority,
         max(n.`_actual_date`) AS _actual_date
     FROM base AS n
-    GROUP BY n.taxpayer_iin_bin, n.benefeciary_key
+    GROUP BY n.taxpayer_key, n.benefeciary_key
 )
 SELECT
-    pr.taxpayer_iin_bin AS taxpayer_iin_bin,
-    COALESCE(comp.company_name, '') AS taxpayer_name,
+    -- Служебный ключ компании: по нему строятся ссылки и сведение
+    pr.taxpayer_key AS taxpayer_key,
+    -- В поле БИН только номер либо слово «Иностранная компания»
+    {display_bin_expr} AS taxpayer_iin_bin,
+    -- Наименование: справочник ЮЛ, затем то, что дала сводная таблица
+    if(COALESCE(comp.company_name, '') != '',
+        comp.company_name,
+        pr.source_company_name) AS taxpayer_name,
     -- Служебный ключ: по нему строятся ссылки и сведение
     pr.benefeciary_key AS benefeciary_key,
     -- В поле ИИН только номер, слово «нерезидент» либо пусто
@@ -434,11 +489,11 @@ SELECT
     b2.ball2 AS ball2,
     if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2)) AS ball3
 FROM pairs pr
-LEFT JOIN ball1_t b1 ON pr.taxpayer_iin_bin = b1.taxpayer_iin_bin
-LEFT JOIN ball2_t b2 ON pr.taxpayer_iin_bin = b2.taxpayer_iin_bin
+LEFT JOIN ball1_t b1 ON pr.taxpayer_key = b1.taxpayer_key
+LEFT JOIN ball2_t b2 ON pr.taxpayer_key = b2.taxpayer_key
     AND pr.benefeciary_key = b2.benefeciary_key
-LEFT JOIN companies comp ON pr.taxpayer_iin_bin = comp.taxpayer_iin_bin
-LEFT JOIN ownership own ON pr.taxpayer_iin_bin = own.taxpayer_iin_bin
+LEFT JOIN companies comp ON pr.bin_clean = comp.taxpayer_iin_bin
+LEFT JOIN ownership own ON pr.bin_clean = own.taxpayer_iin_bin
 LEFT JOIN documents doc ON pr.iin_clean = doc.taxpayer_iin_bin
 LEFT JOIN shares sh ON pr.iin_clean = sh.holder_iin_bin
 -- Фильтр из ТЗ: исключаются строки, где пуст и ИИН, и имя бенефициара
@@ -449,7 +504,9 @@ WHERE NOT (pr.benefeciary_key = '' AND pr.benefeciary_name = '')
 
 
 def build_company_summary_sql(
-    result_tables: Iterable[str], company_filter: Optional[str] = None
+    result_tables: Iterable[str],
+    company_filter: Optional[str] = None,
+    named_tables: Iterable[str] = (),
 ) -> str:
     """Сводка по компаниям для страницы поиска.
 
@@ -460,7 +517,7 @@ def build_company_summary_sql(
     Запрос при этом тяжёлый, поэтому его результат кешируется в
     ``listing_service``, а не запрашивается на каждое обращение.
     """
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
     where_clause = f"WHERE {company_filter}" if company_filter else ""
     keyed_sql = build_keyed_union_sql(
         union_sql, ["algorithm_code", "priority"], where=where_clause
@@ -471,39 +528,44 @@ WITH base AS (
 ),
 algo AS (
     SELECT
-        b.taxpayer_iin_bin AS taxpayer_iin_bin,
+        b.taxpayer_key AS taxpayer_key,
+        any(b.bin_clean) AS bin_clean,
         b.benefeciary_key AS benefeciary_key,
         b.algorithm_code AS algorithm_code,
         any(b.priority) AS priority
     FROM base AS b
-    GROUP BY b.taxpayer_iin_bin, b.benefeciary_key, b.algorithm_code
+    GROUP BY b.taxpayer_key, b.benefeciary_key, b.algorithm_code
 ),
 ball2_t AS (
     SELECT
-        a.taxpayer_iin_bin AS taxpayer_iin_bin,
+        a.taxpayer_key AS taxpayer_key,
+        any(a.bin_clean) AS bin_clean,
         a.benefeciary_key AS benefeciary_key,
         sum(a.priority) AS ball2
     FROM algo AS a
-    GROUP BY a.taxpayer_iin_bin, a.benefeciary_key
+    GROUP BY a.taxpayer_key, a.benefeciary_key
 ),
 ball1_t AS (
-    SELECT a.taxpayer_iin_bin AS taxpayer_iin_bin, sum(a.priority) AS ball1
+    SELECT a.taxpayer_key AS taxpayer_key, sum(a.priority) AS ball1
     FROM algo AS a
-    GROUP BY a.taxpayer_iin_bin
+    GROUP BY a.taxpayer_key
 )
 SELECT
-    b2.taxpayer_iin_bin AS taxpayer_iin_bin,
+    b2.taxpayer_key AS taxpayer_key,
+    any(b2.bin_clean) AS bin_clean,
     count(DISTINCT b2.benefeciary_key) AS beneficiary_count,
     max(if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2))) AS max_ball3
 FROM ball2_t b2
-LEFT JOIN ball1_t b1 ON b2.taxpayer_iin_bin = b1.taxpayer_iin_bin
-GROUP BY b2.taxpayer_iin_bin
+LEFT JOIN ball1_t b1 ON b2.taxpayer_key = b1.taxpayer_key
+GROUP BY b2.taxpayer_key
 """.strip()
 
 
-def build_stats_sql(result_tables: Iterable[str]) -> str:
+def build_stats_sql(
+    result_tables: Iterable[str], named_tables: Iterable[str] = ()
+) -> str:
     """Общая статистика реестра для /api/stats."""
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
     keyed_sql = build_keyed_union_sql(
         union_sql, ["status", "algorithm_code", "priority"]
     )
@@ -513,7 +575,7 @@ WITH base AS (
 )
 SELECT
     count() AS total_rows,
-    uniqExact(b.taxpayer_iin_bin) AS company_count,
+    uniqExact(b.taxpayer_key) AS company_count,
     uniqExact(b.benefeciary_key) AS beneficiary_count,
     uniqExactIf(b.benefeciary_key, b.status LIKE 'Регистрационный%') AS registration_count,
     uniqExactIf(b.benefeciary_key, b.status LIKE 'Предполагаемый%') AS assumed_count,
@@ -524,15 +586,17 @@ FROM base AS b
 """.strip()
 
 
-def build_stats_by_algorithm_sql(result_tables: Iterable[str]) -> str:
+def build_stats_by_algorithm_sql(
+    result_tables: Iterable[str], named_tables: Iterable[str] = ()
+) -> str:
     """Разрез статистики по алгоритмам."""
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
     keyed_sql = build_keyed_union_sql(union_sql, ["algorithm_code", "priority"])
     return f"""
 SELECT
     d.algorithm_code AS algorithm_code,
     any(d.priority) AS priority,
-    uniqExact(d.taxpayer_iin_bin) AS company_count,
+    uniqExact(d.taxpayer_key) AS company_count,
     uniqExact(d.benefeciary_key) AS beneficiary_count,
     count() AS row_count
 FROM (
@@ -543,7 +607,9 @@ ORDER BY d.algorithm_code
 """.strip()
 
 
-def build_empty_reason_sql(result_tables: Iterable[str]) -> str:
+def build_empty_reason_sql(
+    result_tables: Iterable[str], named_tables: Iterable[str] = ()
+) -> str:
     """Почему по компании ничего не показано, хотя строки в источнике есть.
 
     Считается по тому же объединению и той же чистке, что и реестр, но без
@@ -555,7 +621,7 @@ def build_empty_reason_sql(result_tables: Iterable[str]) -> str:
     не сошлась — строка выпадает), сколько не опознать вовсе, и какие
     алгоритмы эту компанию нашли.
     """
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
     first_part_list = ", ".join(f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS)
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
     name = cleaning.name_from_dop("u.dop_info", "u.algorithm_code", first_part_list)
@@ -581,7 +647,9 @@ FROM cleaned AS c
 """
 
 
-def build_company_name_fallback_sql(result_tables: Iterable[str]) -> str:
+def build_company_name_fallback_sql(
+    result_tables: Iterable[str], named_tables: Iterable[str] = ()
+) -> str:
     """Наименование компании, которой нет в справочнике юридических лиц.
 
     Такое бывает у иностранных организаций: бенефициары у них выявлены,
@@ -589,7 +657,7 @@ def build_company_name_fallback_sql(result_tables: Iterable[str]) -> str:
     как бенефициар, и рядом лежит строка сведений с названием — её и
     разбираем теми же правилами, что и имя бенефициара.
     """
-    union_sql = build_union_sql(result_tables)
+    union_sql = build_union_sql(result_tables, named_tables)
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
     name = cleaning.display_name("u.dop_info")
     return f"""

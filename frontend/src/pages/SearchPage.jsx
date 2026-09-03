@@ -29,7 +29,7 @@ function CompanyRow({ item, onOpen }) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(item.taxpayer_iin_bin)}
+      onClick={() => onOpen(item.taxpayer_key || item.taxpayer_iin_bin)}
       className="card w-full px-5 py-4 text-left transition-shadow hover:shadow-md"
     >
       <div className="flex flex-wrap items-start gap-4">
@@ -55,21 +55,6 @@ function CompanyRow({ item, onOpen }) {
           <div className="text-center">
             <div className="text-[11px] uppercase tracking-wide text-slate-500">БС</div>
             <div className="text-lg font-semibold text-slate-800">{item.beneficiary_count}</div>
-          </div>
-
-          <div className="w-40">
-            <div className="mb-1 flex items-center justify-between text-[11px]">
-              <span className="text-slate-500">Вероятность</span>
-              <span className={`font-semibold ${style.text}`}>
-                {Number(item.max_ball3 || 0).toFixed(2)}%
-              </span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-              <div
-                className={`h-full rounded-full ${style.bar}`}
-                style={{ width: `${Math.min(100, Number(item.max_ball3) || 0)}%` }}
-              />
-            </div>
           </div>
         </div>
       </div>
@@ -272,7 +257,11 @@ export default function SearchPage() {
         <div className="space-y-2">
           <div className="text-sm text-slate-500">Найдено компаний: {results.length}</div>
           {results.map((item) => (
-            <CompanyRow key={item.taxpayer_iin_bin} item={item} onOpen={openCompany} />
+            <CompanyRow
+              key={item.taxpayer_key || item.taxpayer_iin_bin}
+              item={item}
+              onOpen={openCompany}
+            />
           ))}
         </div>
       )}
