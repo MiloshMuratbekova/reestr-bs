@@ -131,15 +131,39 @@ async def get_founders(bin_value: str) -> List[Dict[str, Any]]:
             -- NULL целиком, поэтому у учредителя без отчества пропадало всё
             -- имя, а не одно отчество. Сравнение с '' у Nullable тоже даёт
             -- NULL, и ветка выбора уходила не туда.
-            if(ifNull(toString(f.founder_ul_name), '') != '',
-                toString(f.founder_ul_name),
+            --
+            -- Имя по убыванию надёжности: наименование юрлица из самой строки,
+            -- собранное ФИО, справочник физлиц, справочник организаций.
+            -- Справочники нужны потому, что в таблице учредителей поля имени
+            -- сплошь и рядом пустые, а ИИН при этом заполнен — без них
+            -- в карточке стоял прочерк.
+            multiIf(
+                ifNull(toString(f.founder_ul_name), '') != '',
+                    toString(f.founder_ul_name),
                 trimBoth(concat(
                     ifNull(toString(f.founder_last_name), ''), ' ',
                     ifNull(toString(f.founder_first_name), ''), ' ',
-                    ifNull(toString(f.founder_part_name), '')))) AS founder_name,
+                    ifNull(toString(f.founder_part_name), ''))) != '',
+                    trimBoth(concat(
+                        ifNull(toString(f.founder_last_name), ''), ' ',
+                        ifNull(toString(f.founder_first_name), ''), ' ',
+                        ifNull(toString(f.founder_part_name), ''))),
+                COALESCE(pf.person_name, '') != '', pf.person_name,
+                COALESCE(cf.company_name, '')
+            ) AS founder_name,
             ifNull(toString(f.share_percentage), '') AS share_percentage,
             ifNull(toString(f.`_actual_date`), '') AS _actual_date
         FROM {settings.TBL_FOUNDERS} AS f
+        LEFT JOIN (
+            SELECT taxpayer_iin_bin, ifNull(any(taxpayer_name), '') AS person_name
+            FROM {settings.DICT_PERSONS}
+            GROUP BY taxpayer_iin_bin
+        ) AS pf ON ifNull(toString(f.founder_iin_bin), '') = pf.taxpayer_iin_bin
+        LEFT JOIN (
+            SELECT taxpayer_iin_bin, ifNull(any(taxpayer_name), '') AS company_name
+            FROM {settings.DICT_COMPANIES}
+            GROUP BY taxpayer_iin_bin
+        ) AS cf ON ifNull(toString(f.founder_iin_bin), '') = cf.taxpayer_iin_bin
         WHERE f.taxpayer_iin_bin = {{bin:String}}
           -- Дата берётся последняя ПО ЭТОЙ компании, а не по всей таблице:
           -- если её сведения не обновлялись в последнюю загрузку, при сравнении
@@ -161,12 +185,23 @@ async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
         SELECT DISTINCT
             ifNull(toString(d.employee_iin_bin), '') AS director_iin_bin,
             -- То же, что у учредителей: NULL в отчестве обнулял всё имя
-            trimBoth(concat(
-                ifNull(toString(d.employee_last_name), ''), ' ',
-                ifNull(toString(d.employee_first_name), ''), ' ',
-                ifNull(toString(d.employee_part_name), ''))) AS director_name,
+            -- Как у учредителей: если поля имени пусты, берём из справочника
+            if(trimBoth(concat(
+                    ifNull(toString(d.employee_last_name), ''), ' ',
+                    ifNull(toString(d.employee_first_name), ''), ' ',
+                    ifNull(toString(d.employee_part_name), ''))) != '',
+                trimBoth(concat(
+                    ifNull(toString(d.employee_last_name), ''), ' ',
+                    ifNull(toString(d.employee_first_name), ''), ' ',
+                    ifNull(toString(d.employee_part_name), ''))),
+                COALESCE(pd.person_name, '')) AS director_name,
             ifNull(toString(d.`_actual_date`), '') AS _actual_date
         FROM {settings.TBL_DIRECTORS} AS d
+        LEFT JOIN (
+            SELECT taxpayer_iin_bin, ifNull(any(taxpayer_name), '') AS person_name
+            FROM {settings.DICT_PERSONS}
+            GROUP BY taxpayer_iin_bin
+        ) AS pd ON ifNull(toString(d.employee_iin_bin), '') = pd.taxpayer_iin_bin
         WHERE d.taxpayer_iin_bin = {{bin:String}}
           AND d.`_actual_date` = (
               SELECT max(`_actual_date`) FROM {settings.TBL_DIRECTORS}

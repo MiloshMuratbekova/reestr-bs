@@ -94,7 +94,8 @@ def build_union_sql(
 
 
 def build_keyed_union_sql(
-    union_sql: str, passthrough: List[str], *, where: str = ""
+    union_sql: str, passthrough: List[str], *, where: str = "",
+    outer_where: str = "",
 ) -> str:
     """Объединение, приведённое в порядок: очищенный ИИН и ключ сведения.
 
@@ -102,12 +103,19 @@ def build_keyed_union_sql(
     заглушки 000000000 и «-» шли бы за отдельных бенефициаров, а один и тот
     же нерезидент, записанный двумя алгоритмами по-разному, — за двоих.
     Числа на дашборде тогда не сходятся с содержимым карточек.
+
+    :param where: условие по СЫРЫМ полям, ставится до расчёта ключей.
+    :param outer_where: условие по ключам, ставится после. Разделять
+        обязательно: ключа внутри подзапроса ещё нет, и попытка отобрать
+        по нему там роняет запрос.
     """
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
     bin_clean = cleaning.clean_bin("u.taxpayer_iin_bin")
     name = cleaning.display_name("u.dop_info")
     key = cleaning.beneficiary_key("k.iin_clean", "k.benefeciary_name")
     company = cleaning.company_key("k.bin_clean", "k.taxpayer_name")
+    # Условие по ключам дописывается через AND: WHERE в подзапросе уже есть
+    outer_clause = f"\n      AND ({outer_where})" if outer_where else ""
     inner = "".join(f"        u.{column} AS {column},\n" for column in passthrough)
     outer = "".join(f"        k.{column} AS {column},\n" for column in passthrough)
     return f"""    SELECT DISTINCT
@@ -131,7 +139,7 @@ def build_keyed_union_sql(
         {where}
     ) AS k
     -- Ни ИИН, ни имени — опознать лицо нечем
-    WHERE NOT (k.iin_clean = '' AND k.benefeciary_name = '')"""
+    WHERE NOT (k.iin_clean = '' AND k.benefeciary_name = ''){outer_clause}"""
 
 
 def build_registry_sql(
@@ -518,9 +526,17 @@ def build_company_summary_sql(
     ``listing_service``, а не запрашивается на каждое обращение.
     """
     union_sql = build_union_sql(result_tables, named_tables)
-    where_clause = f"WHERE {company_filter}" if company_filter else ""
+    # Отбор по служебному ключу возможен только после его расчёта, а по
+    # сырому полю — наоборот, до: так отсекается лишнее чтение
+    by_key = bool(company_filter) and (
+        "taxpayer_key" in company_filter or "benefeciary_key" in company_filter
+    )
+    where_clause = "" if by_key or not company_filter else f"WHERE {company_filter}"
     keyed_sql = build_keyed_union_sql(
-        union_sql, ["algorithm_code", "priority"], where=where_clause
+        union_sql,
+        ["algorithm_code", "priority"],
+        where=where_clause,
+        outer_where=company_filter if by_key else "",
     )
     return f"""
 WITH base AS (

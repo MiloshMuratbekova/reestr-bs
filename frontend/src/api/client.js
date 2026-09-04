@@ -109,7 +109,7 @@ export const registryApi = {
 export const listingApi = {
   companies: (params) => api.get('/companies', { params }),
   beneficiaries: (params) => api.get('/beneficiaries', { params }),
-  beneficiary: (iin) => api.get(`/beneficiaries/${encodeURIComponent(iin)}`),
+  beneficiary: (key) => api.get('/beneficiary', { params: { key } }),
   ownership: (id) => api.get(`/ownership/${encodeURIComponent(id)}`),
   sources: () => api.get('/sources'),
 }

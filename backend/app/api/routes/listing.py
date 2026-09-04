@@ -104,8 +104,26 @@ async def beneficiaries(
 
 
 @router.get(
-    "/beneficiaries/{iin}",
+    "/beneficiary",
     summary="Профиль бенефициара и все компании, где он выявлен",
+)
+async def beneficiary_by_key(key: str, session: SessionDep, _: CurrentUser) -> dict:
+    """Ключ передаётся параметром запроса, а не частью пути.
+
+    У нерезидента ключ выглядит как «нерезидент: Иванов Иван», а в имени
+    может оказаться косая черта. В пути такой ключ разбивается на сегменты,
+    и профиль не открывался вовсе.
+    """
+    try:
+        return await listing_service.beneficiary_profile(session, key)
+    except ClickHouseError as exc:
+        logger.error("Профиль бенефициара %s не построен: %s", key, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc
+
+
+@router.get(
+    "/beneficiaries/{iin}",
+    summary="Профиль бенефициара по ИИН (прежний путь)",
 )
 async def beneficiary(iin: str, session: SessionDep, _: CurrentUser) -> dict:
     try:
