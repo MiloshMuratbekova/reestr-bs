@@ -20,6 +20,10 @@ class CompanySearchItem(BaseModel):
 
 
 class BeneficiaryOut(BaseModel):
+    taxpayer_key: str = ""
+    #: Служебный ключ бенефициара — по нему строятся ссылки и пояснения ИИ
+    benefeciary_key: str = ""
+    is_nonresident: bool = False
     taxpayer_iin_bin: str
     taxpayer_name: str = ""
     benefeciary_iin_bin: str = ""
@@ -41,6 +45,9 @@ class BeneficiaryOut(BaseModel):
 
 
 class CompanyInfo(BaseModel):
+    taxpayer_key: str = ""
+    #: Компании нет в справочнике ЮЛ — реквизиты собраны из реестра
+    is_unknown: bool = False
     taxpayer_iin_bin: str
     taxpayer_name: str = ""
     category: str = ""

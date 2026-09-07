@@ -225,7 +225,11 @@ paired AS (
         any(r.benefeciary_name) AS benefeciary_name,
         -- При нескольких алгоритмах побеждает строка с наименьшим баллом:
         -- регистрационный признак (0) сильнее предполагаемого
-        argMin(r.status, r.priority) AS status,
+        -- Регистрационный признак сильнее предполагаемого: если лицо
+        -- нашлось и тем, и другим, показывается регистрационный. Ключ
+        -- сравнения ставит такие строки первыми независимо от балла.
+        argMin(r.status, (if(r.status LIKE 'Регистрационный%', 0, 1), r.priority))
+            AS status,
         argMin(r.dop_info, r.priority) AS dop_info,
         argMin(r.category, r.priority) AS category,
         argMin(r.document_info, r.priority) AS document_info,
@@ -411,7 +415,8 @@ per_pair AS (
         r.benefeciary_key AS benefeciary_key,
         any(r.benefeciary_iin_bin) AS benefeciary_iin_bin,
         any(r.benefeciary_name) AS benefeciary_name,
-        argMin(r.status, r.priority) AS status,
+        argMin(r.status, (if(r.status LIKE 'Регистрационный%', 0, 1), r.priority))
+            AS status,
         argMin(r.dop_info, r.priority) AS dop_info,
         max(r.is_nonresident) AS is_nonresident,
         groupUniqArray(r.algorithm_code) AS algorithm_codes,
@@ -425,7 +430,8 @@ rolled AS (
         any(p.benefeciary_iin_bin) AS benefeciary_iin_bin,
         argMin(p.benefeciary_name, (p.min_priority, p.benefeciary_name))
             AS benefeciary_name,
-        argMin(p.status, (p.min_priority, p.benefeciary_name)) AS status,
+        argMin(p.status,
+            (if(p.status LIKE 'Регистрационный%', 0, 1), p.min_priority)) AS status,
         argMin(p.dop_info, (p.min_priority, p.benefeciary_name)) AS dop_info,
         max(p.is_nonresident) AS is_nonresident,
         arraySort(arrayDistinct(arrayFlatten(groupArray(p.algorithm_codes))))
@@ -559,4 +565,24 @@ FROM per_company AS p
 INNER JOIN company AS n ON p.taxpayer_key = n.taxpayer_key
 LEFT JOIN dict AS k ON n.taxpayer_iin_bin = k.taxpayer_iin_bin
 ORDER BY {order_column} DESC, p.taxpayer_key ASC
+""".strip()
+
+
+def build_company_head_sql(merged_table: str, columns: Iterable[str]) -> str:
+    """Реквизиты компании, какие есть в сводной таблице.
+
+    Нужны, когда компании нет в справочнике ЮЛ: наименование у неё всё равно
+    есть — организация подставляет его в сводную по шести источникам.
+    """
+    return f"""
+WITH {build_rows_cte(merged_table, columns)}
+SELECT
+    r.taxpayer_key AS taxpayer_key,
+    any(r.taxpayer_iin_bin) AS taxpayer_iin_bin,
+    any(r.taxpayer_name) AS taxpayer_name,
+    any(r.category) AS category
+FROM rows AS r
+WHERE r.taxpayer_key = {{bin:String}} OR r.taxpayer_iin_bin = {{bin:String}}
+GROUP BY r.taxpayer_key
+LIMIT 1
 """.strip()

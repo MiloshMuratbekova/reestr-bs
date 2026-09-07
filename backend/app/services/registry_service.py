@@ -263,6 +263,28 @@ async def company_outside_dictionary(
     наименование, разобранное из реестра, — чтобы ссылка на компанию вела
     на карточку, а не в пустоту.
     """
+    source = await algorithm_service.merged_source()
+    if source:
+        # Наименование берётся из сводной таблицы: организация подставляет
+        # его туда по шести источникам, включая иностранные организации
+        merged, columns = source
+        head = await clickhouse.fetch_one(
+            direct_sql.build_company_head_sql(merged, columns), {"bin": bin_value}
+        )
+        if not head:
+            return None
+        return {
+            "taxpayer_iin_bin": str(head.get("taxpayer_iin_bin") or bin_value),
+            "taxpayer_name": str(head.get("taxpayer_name") or ""),
+            "category": str(head.get("category") or ""),
+            "reg_start_date": "",
+            "address": "",
+            "code_nd": "",
+            "ownership_type": "",
+            "is_state_owned": False,
+            "is_unknown": True,
+        }
+
     tables = await algorithm_service.active_result_tables(session)
     if not tables:
         return None

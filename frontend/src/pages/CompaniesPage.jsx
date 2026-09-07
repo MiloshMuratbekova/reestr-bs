@@ -25,7 +25,6 @@ export default function CompaniesPage() {
 
   const [filters, setFilters] = useState({
     query: searchParams.get('query') || '',
-    region: searchParams.get('region') || '',
     ownership: searchParams.get('ownership') || '',
     risk: searchParams.get('risk') || '',
     scope: searchParams.get('scope') || 'registry',
@@ -48,7 +47,6 @@ export default function CompaniesPage() {
         page,
         limit: PAGE_SIZE,
         query: filters.query || undefined,
-        region: filters.region || undefined,
         ownership: filters.ownership || undefined,
         risk: filters.risk || undefined,
         scope: filters.scope,
@@ -149,19 +147,6 @@ export default function CompaniesPage() {
           </div>
 
           <div>
-            <label className="label" htmlFor="region">
-              Регион (код НД)
-            </label>
-            <input
-              id="region"
-              className="input"
-              value={filters.region}
-              onChange={(event) => changeFilter('region', event.target.value)}
-              placeholder="Например: 71"
-            />
-          </div>
-
-          <div>
             <label className="label" htmlFor="ownership">
               Тип собственности
             </label>
@@ -255,14 +240,6 @@ export default function CompaniesPage() {
                     order={order}
                     onSort={handleSort}
                   />
-                  <SortHeader
-                    column="code_nd"
-                    label="Регион"
-                    sort={sort}
-                    order={order}
-                    onSort={handleSort}
-                  />
-                  <th>Форма</th>
                   <th>Тип собственности</th>
                   {!dictionaryScope ? (
                     <>
@@ -311,8 +288,6 @@ export default function CompaniesPage() {
                           <span className="badge ml-2 bg-slate-200 text-slate-700">Гос</span>
                         )}
                       </td>
-                      <td>{value(item.region || item.code_nd)}</td>
-                      <td>{value(item.category)}</td>
                       <td className="max-w-[16rem] truncate" title={item.ownership_type}>
                         {value(item.ownership_type)}
                       </td>

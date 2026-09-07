@@ -11,15 +11,17 @@ from pydantic import BaseModel, Field
 # Списки
 # ---------------------------------------------------------------------------
 class CompanyListItem(BaseModel):
+    #: Служебный ключ: по нему открывается карточка. У компании без БИН
+    #: он содержит наименование, иначе все иностранные вели бы на одну.
+    taxpayer_key: str = ""
     taxpayer_iin_bin: str = Field(description="БИН юридического лица")
     taxpayer_name: str = ""
-    category: str = ""
-    code_nd: str = ""
-    region: str = ""
     address: str = ""
     reg_start_date: str = ""
     ownership_type: str = ""
     is_state_owned: bool = False
+    #: Компании нет в справочнике ЮЛ — сведения только из реестра
+    is_unknown: bool = False
     beneficiary_count: int = 0
     max_ball3: float = 0
 
@@ -33,6 +35,9 @@ class CompanyListResponse(BaseModel):
 
 
 class BeneficiaryListItem(BaseModel):
+    #: Служебный ключ: по нему открывается профиль. Без него строка
+    #: в интерфейсе не нажималась — Pydantic вырезал поле из ответа.
+    benefeciary_key: str = ""
     benefeciary_iin_bin: str = ""
     benefeciary_name: str = ""
     status: str = ""
