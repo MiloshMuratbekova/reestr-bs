@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.algorithms import direct_sql
 from app.algorithms.definitions import (
     ALGORITHMS,
     ALGORITHMS_BY_CODE,
@@ -269,6 +270,37 @@ async def merged_table_if_usable() -> Optional[str]:
         ", ".join(candidates) or "не задано",
     )
     return None
+
+
+async def merged_source() -> Optional[Tuple[str, List[str]]]:
+    """Сводная таблица и её колонки, если из неё можно читать напрямую.
+
+    Прямое чтение — основной путь: сводную собирает организация и там же
+    приводит данные в порядок, поэтому пересчитывать нечего. Возвращается
+    None, если таблицы нет или в ней не хватает полей — тогда реестр
+    собирается по таблицам отдельных алгоритмов, как раньше.
+    """
+    merged = await merged_table_if_usable()
+    if not merged:
+        return None
+
+    database, table = merged.split(".", 1)
+    try:
+        columns = await clickhouse.table_columns(database, table)
+    except ClickHouseError as exc:
+        logger.warning("Не удалось прочитать состав %s: %s", merged, exc)
+        return None
+
+    missing = direct_sql.REQUIRED_COLUMNS - columns
+    if missing:
+        logger.warning(
+            "Прямое чтение %s невозможно, не хватает полей: %s. "
+            "Реестр собирается по таблицам алгоритмов",
+            merged,
+            ", ".join(sorted(missing)),
+        )
+        return None
+    return merged, sorted(columns)
 
 
 async def named_result_tables() -> List[str]:

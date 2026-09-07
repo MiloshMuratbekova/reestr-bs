@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.algorithms import direct_sql
 from app.algorithms.registry_sql import (
     build_company_name_fallback_sql,
     build_company_summary_sql,
@@ -215,6 +216,21 @@ async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
 
 async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[str, Any]]:
     """Список БС компании, рассчитанный из всех активных алгоритмов."""
+    source = await algorithm_service.merged_source()
+    if source:
+        # Сводная таблица уже вычищена организацией — читаем её как есть
+        merged, columns = source
+        rows = await clickhouse.fetch_all(
+            direct_sql.build_registry_sql(
+                merged,
+                columns,
+                company_filter="taxpayer_key = {bin:String}",
+                row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
+            ),
+            {"bin": bin_value},
+        )
+        return sort_beneficiaries(rows)
+
     tables = await algorithm_service.active_result_tables(session)
     if not tables:
         logger.warning("Нет ни одной рассчитанной таблицы алгоритмов — реестр пуст")
@@ -460,8 +476,9 @@ def _apply_filters(
 # ---------------------------------------------------------------------------
 async def get_stats(session: AsyncSession) -> Dict[str, Any]:
     """Общая статистика реестра."""
+    source = await algorithm_service.merged_source()
     tables = await algorithm_service.active_result_tables(session)
-    if not tables:
+    if not tables and not source:
         return {
             "total_rows": 0,
             "company_count": 0,
@@ -474,8 +491,17 @@ async def get_stats(session: AsyncSession) -> Dict[str, Any]:
             "algorithms_calculated": 0,
         }
 
-    totals = await clickhouse.fetch_one(build_stats_sql(tables, await algorithm_service.named_result_tables())) or {}
-    by_algorithm = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables, await algorithm_service.named_result_tables()))
+    if source:
+        merged, columns = source
+        stats_sql = direct_sql.build_stats_sql(merged, columns)
+        by_algorithm_sql = direct_sql.build_stats_by_algorithm_sql(merged, columns)
+    else:
+        named = await algorithm_service.named_result_tables()
+        stats_sql = build_stats_sql(tables, named)
+        by_algorithm_sql = build_stats_by_algorithm_sql(tables, named)
+
+    totals = await clickhouse.fetch_one(stats_sql) or {}
+    by_algorithm = await clickhouse.fetch_all(by_algorithm_sql)
 
     algorithms = await algorithm_service.list_algorithms(session)
     hints = {a.code: a.name for a in algorithms}

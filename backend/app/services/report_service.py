@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.algorithms import direct_sql
 from app.algorithms.registry_sql import (
     build_registry_sql,
     build_stats_by_algorithm_sql,
@@ -167,14 +168,22 @@ async def _fetch_rows(
     session: AsyncSession, template: ReportTemplate, parameters: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     tables = await algorithm_service.active_result_tables(session)
-    if not tables:
+    source = await algorithm_service.merged_source()
+    if not tables and not source:
         raise ReportError(
             "Ни один алгоритм ещё не рассчитан — отчёт формировать не из чего. "
             "Запустите пересчёт реестра."
         )
 
     if template.key == "algorithms":
-        rows = await clickhouse.fetch_all(build_stats_by_algorithm_sql(tables, await algorithm_service.named_result_tables()))
+        if source:
+            merged, columns = source
+            by_algorithm_sql = direct_sql.build_stats_by_algorithm_sql(merged, columns)
+        else:
+            by_algorithm_sql = build_stats_by_algorithm_sql(
+                tables, await algorithm_service.named_result_tables()
+            )
+        rows = await clickhouse.fetch_all(by_algorithm_sql)
         names = {a.code: a.name for a in await algorithm_service.list_algorithms(session)}
         for row in rows:
             row["name"] = names.get(row.get("algorithm_code", ""), "")
@@ -182,6 +191,26 @@ async def _fetch_rows(
 
     limit = int(parameters.get("limit") or DEFAULT_REPORT_ROWS)
     limit = max(1, min(MAX_REPORT_ROWS, limit))
+
+    if source:
+        merged, columns = source
+        # В прямом чтении баллы уже посчитаны в scored, а статус лежит
+        # в самой строке — условия отбора записываются по ним
+        direct_extra: List[str] = []
+        if template.key == "high_risk":
+            threshold = float(parameters.get("threshold") or 70)
+            threshold = max(0.0, min(100.0, threshold))
+            direct_extra.append(f"s.ball3 > {threshold}")
+        elif template.key == "nonresidents":
+            direct_extra.append("p.status LIKE '%нерезидент%'")
+        return await clickhouse.fetch_all(
+            direct_sql.build_registry_sql(
+                merged,
+                columns,
+                extra_conditions=direct_extra or None,
+                row_limit=limit,
+            )
+        )
 
     extra: List[str] = []
     if template.key == "high_risk":

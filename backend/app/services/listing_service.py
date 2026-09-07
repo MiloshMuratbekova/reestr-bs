@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.algorithms import sources as sources_catalog
+from app.algorithms import direct_sql
 from app.algorithms.listing_sql import (
     BENEFICIARY_SORT_COLUMNS,
     COMPANY_SORT_COLUMNS,
@@ -142,11 +143,20 @@ async def list_companies(
     if sort not in COMPANY_SORT_COLUMNS:
         sort = "max_ball3"
 
-    named = await algorithm_service.named_result_tables()
-    sql = build_companies_list_sql(
-        tables,
-        named_tables=named, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
-    )
+    source = await algorithm_service.merged_source()
+    if source:
+        merged, columns = source
+        sql = direct_sql.build_companies_list_sql(
+            merged, columns, conditions=conditions, sort=sort,
+            order=order, limit=limit, offset=offset,
+        )
+    else:
+        sql = build_companies_list_sql(
+            tables,
+            named_tables=await algorithm_service.named_result_tables(),
+            conditions=conditions, sort=sort, order=order,
+            limit=limit, offset=offset,
+        )
     rows = await clickhouse.fetch_all(sql, params)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
@@ -314,11 +324,20 @@ async def list_beneficiaries(
     if sort not in BENEFICIARY_SORT_COLUMNS:
         sort = "max_ball3"
 
-    named = await algorithm_service.named_result_tables()
-    sql = build_beneficiaries_list_sql(
-        tables,
-        named_tables=named, conditions=conditions, sort=sort, order=order, limit=limit, offset=offset
-    )
+    source = await algorithm_service.merged_source()
+    if source:
+        merged, columns = source
+        sql = direct_sql.build_beneficiaries_list_sql(
+            merged, columns, conditions=conditions, sort=sort,
+            order=order, limit=limit, offset=offset,
+        )
+    else:
+        sql = build_beneficiaries_list_sql(
+            tables,
+            named_tables=await algorithm_service.named_result_tables(),
+            conditions=conditions, sort=sort, order=order,
+            limit=limit, offset=offset,
+        )
     rows = await clickhouse.fetch_all(sql, params)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
@@ -349,6 +368,17 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
     # применяется: она меняет как раз то поле, по которому фильтруем, и
     # запрос пришлось бы разворачивать по всему реестру. Профиль строится
     # по тому идентификатору, который выдали алгоритмы.
+    source = await algorithm_service.merged_source()
+    if source:
+        merged, columns = source
+        sql = direct_sql.build_registry_sql(
+            merged, columns,
+            company_filter="benefeciary_key = {iin:String}",
+            row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
+        )
+        rows = await clickhouse.fetch_all(sql, {"iin": iin})
+        return _profile_from_rows(iin, rows)
+
     sql = build_registry_sql(
         tables,
         named_tables=await algorithm_service.named_result_tables(),
@@ -357,7 +387,11 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
     )
     rows = await clickhouse.fetch_all(sql, {"iin": iin})
+    return _profile_from_rows(iin, rows)
 
+
+def _profile_from_rows(iin: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Ответ профиля бенефициара из уже полученных строк реестра."""
     name = next((r.get("benefeciary_name") for r in rows if r.get("benefeciary_name")), "")
     companies = sorted(
         rows,
@@ -744,11 +778,29 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
         except ClickHouseError as exc:
             logger.warning("Общее число ЮЛ не получено: %s", exc)
 
-        if not tables:
+        source = await algorithm_service.merged_source()
+        if not tables and not source:
             return payload
 
+        if source:
+            merged, columns = source
+            dashboard_sql = direct_sql.build_dashboard_summary_sql(merged, columns)
+
+            def top_sql(by: str) -> str:
+                return direct_sql.build_top_companies_sql(
+                    merged, columns, by=by, limit=10
+                )
+        else:
+            named = await algorithm_service.named_result_tables()
+            dashboard_sql = build_dashboard_summary_sql(tables, named)
+
+            def top_sql(by: str) -> str:
+                return build_top_companies_sql(
+                    tables, by=by, limit=10, named_tables=named
+                )
+
         try:
-            summary = await clickhouse.fetch_one(build_dashboard_summary_sql(tables, await algorithm_service.named_result_tables())) or {}
+            summary = await clickhouse.fetch_one(dashboard_sql) or {}
             payload.update(
                 {
                     "companies_with_bs": int(summary.get("companies_with_bs") or 0),
@@ -762,7 +814,7 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
 
         for key, by in (("top_by_beneficiaries", "count"), ("top_by_risk", "risk")):
             try:
-                rows = await clickhouse.fetch_all(build_top_companies_sql(tables, by=by, limit=10, named_tables=await algorithm_service.named_result_tables()))
+                rows = await clickhouse.fetch_all(top_sql(by))
                 for row in rows:
                     row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
                     row["region"] = row.get("code_nd") or ""
