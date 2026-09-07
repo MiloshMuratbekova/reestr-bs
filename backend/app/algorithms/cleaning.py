@@ -228,19 +228,24 @@ def display_iin(iin_col: str, nonresident_col: str) -> str:
     )
 
 
-def display_iin_with_id(iin_col: str, nonresident_col: str, dop_col: str) -> str:
+def display_iin_with_id(
+    iin_col: str, nonresident_col: str, dop_col: str, raw_id_col: str = ""
+) -> str:
     """То же поле ИИН, но с иностранным идентификатором вместо слова.
 
-    Порядок: настоящий ИИН, затем идентификатор из сведений, затем слово
-    «нерезидент», затем пусто. Идентификатор точнее слова: по нему лицо
-    можно опознать, а «нерезидент» одинаково у всех.
+    Порядок: настоящий ИИН, затем идентификатор из самого поля ИИН, затем
+    идентификатор из строки сведений, затем слово «нерезидент», затем пусто.
+    Идентификатор точнее слова: по нему лицо можно опознать, а «нерезидент»
+    одинаково у всех.
     """
     identifier = identifier_from_dop(dop_col)
-    return (
-        f"if({iin_col} != '', {iin_col},"
-        f" if({identifier} != '', {identifier},"
-        f" if({nonresident_col}, 'нерезидент', '')))"
+    tail = (
+        f"if({identifier} != '', {identifier},"
+        f" if({nonresident_col}, 'нерезидент', ''))"
     )
+    if raw_id_col:
+        tail = f"if({raw_id_col} != '', {raw_id_col}, {tail})"
+    return f"if({iin_col} != '', {iin_col}, {tail})"
 
 
 def clean_bin(col: str) -> str:
@@ -293,3 +298,32 @@ def display_company_bin(bin_col: str) -> str:
     а не строку с наименованием внутри.
     """
     return f"if({bin_col} != '', {bin_col}, '{FOREIGN_COMPANY}')"
+
+
+#: Слова, которые встречаются вместо номера и идентификатором не являются
+_NOT_IDENTIFIER = ("'%нет%'", "'%отсутств%'", "'%паспорт%'", "'%удостовер%'")
+
+
+def foreign_identifier(col: str) -> str:
+    """Иностранный идентификатор из поля ИИН, иначе пусто.
+
+    Обновлённые скрипты организации оставляют в поле ИИН не только
+    двенадцатизначный номер: у иностранного лица там может стоять его
+    собственный идентификатор. Правило то же, что в скрипте: от пяти до
+    двадцати знаков, без пробелов, есть хотя бы одна цифра, и это не слова
+    «нет», «отсутствует», «паспорт», «удостоверение».
+    """
+    value = f"trimBoth({col})"
+    excluded = " AND ".join(
+        f"lowerUTF8({value}) NOT LIKE {word}" for word in _NOT_IDENTIFIER
+    )
+    return (
+        f"if({value} != ''"
+        f" AND NOT match({value}, '^[0-9]{{12}}$')"
+        f" AND NOT match({value}, '\s')"
+        f" AND NOT match({value}, '^0+$')"
+        f" AND length({value}) BETWEEN 5 AND 20"
+        f" AND match({value}, '[0-9]')"
+        f" AND {excluded},"
+        f" {value}, '')"
+    )

@@ -355,9 +355,11 @@ export default function BeneficiariesPage() {
                 {data.items.map((item) => {
                   return (
                     <tr
-                      key={item.benefeciary_key}
+                      key={item.benefeciary_key || item.benefeciary_iin_bin}
                       className="cursor-pointer"
-                      onClick={() => setSelected(item.benefeciary_key)}
+                      onClick={() =>
+                        setSelected(item.benefeciary_key || item.benefeciary_iin_bin)
+                      }
                     >
                       <td className="font-medium text-slate-800">
                         {value(item.benefeciary_name)}

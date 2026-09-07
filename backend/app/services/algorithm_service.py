@@ -213,7 +213,6 @@ REQUIRED_SOURCE_COLUMNS = frozenset({
 })
 
 #: Пригодность сводной таблицы проверяется один раз за процесс
-_merged_checked = False
 _merged_table: Optional[str] = None
 
 
@@ -223,12 +222,17 @@ async def merged_table_if_usable() -> Optional[str]:
     Форма проверяется по системному словарю, а не принимается на веру:
     таблица без одного из семи полей уронила бы UNION, и пустая карточка
     была бы уже у всех компаний, а не у одной.
+
+    Удачная проверка запоминается на всё время работы: состав колонок
+    у живой таблицы не меняется, а спрашивать словарь на каждый запрос ни
+    к чему. Неудачная НЕ запоминается — иначе таблица, пересозданная уже
+    после запуска, оставалась бы «непригодной» до перезапуска приложения,
+    хотя с ней всё в порядке.
     """
-    global _merged_checked, _merged_table
-    if _merged_checked:
+    global _merged_table
+    if _merged_table:
         return _merged_table
 
-    _merged_checked = True
     candidates = [
         name.strip()
         for name in (settings.MERGED_TABLE or "").split(",")

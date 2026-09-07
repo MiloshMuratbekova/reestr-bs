@@ -227,6 +227,7 @@ def build_registry_sql(
 
     # Выражения приведения данных в порядок — см. app.algorithms.cleaning
     clean_iin_expr = cleaning.clean_iin("r.benefeciary_iin_bin")
+    foreign_id_expr = cleaning.foreign_identifier("r.benefeciary_iin_bin")
     if resolution_map:
         clean_iin_expr = cleaning.clean_iin(f"({resolved_expr})")
     quoted_expr = cleaning.quoted_name("c.dop_info")
@@ -236,7 +237,7 @@ def build_registry_sql(
     unresolved_status_expr = cleaning.unresolved_ul_status("k.status")
     display_name_expr = cleaning.display_name("c.dop_info")
     display_iin_expr = cleaning.display_iin_with_id(
-        "pr.iin_clean", "pr.is_nonresident", "pr.dop_info"
+        "pr.iin_clean", "pr.is_nonresident", "pr.dop_info", "pr.foreign_id"
     )
     is_ul_expr = cleaning.IS_UL.format(col="k.iin_clean")
     clean_bin_expr = cleaning.clean_bin("r.taxpayer_iin_bin")
@@ -287,6 +288,9 @@ cleaned AS (
         {clean_bin_expr} AS bin_clean,
         r.taxpayer_name AS taxpayer_name,
         {clean_iin_expr} AS iin_clean,
+        -- Иностранный идентификатор: в обновлённых скриптах он остаётся
+        -- прямо в поле ИИН, и показать его точнее, чем слово «нерезидент»
+        {foreign_id_expr} AS foreign_id,
         r.status AS status,
         r.algorithm_code AS algorithm_code,
         r.priority AS priority,
@@ -320,6 +324,7 @@ beneficiary_names AS (
 keyed AS (
     SELECT
         c.bin_clean AS bin_clean,
+        c.foreign_id AS foreign_id,
         c.taxpayer_name AS taxpayer_name,
         -- Ключ компании: БИН, а у иностранной — слово с наименованием.
         -- Одно только слово склеило бы все иностранные организации в одну.
@@ -347,6 +352,7 @@ base AS (
     SELECT * FROM (
         SELECT
             k.bin_clean AS bin_clean,
+            k.foreign_id AS foreign_id,
             -- Настоящий БИН доступен и под прежним именем: по нему можно
             -- отбирать компанию, не зная служебного ключа
             k.bin_clean AS taxpayer_iin_bin,
@@ -450,6 +456,7 @@ pairs AS (
         argMin(n.taxpayer_name, (n.priority, n.taxpayer_name)) AS source_company_name,
         n.benefeciary_key AS benefeciary_key,
         any(n.iin_clean) AS iin_clean,
+        argMin(n.foreign_id, (if(n.foreign_id != '', 0, 1), n.priority)) AS foreign_id,
         max(n.is_nonresident) AS is_nonresident,
         -- при нескольких сработавших алгоритмах побеждает статус с наименьшим
         -- баллом: регистрационный (priority 0) важнее предполагаемого
@@ -569,6 +576,8 @@ ball1_t AS (
 SELECT
     b2.taxpayer_key AS taxpayer_key,
     any(b2.bin_clean) AS bin_clean,
+    -- Тот же БИН под прежним именем: сводку читают по нему в поиске
+    any(b2.bin_clean) AS taxpayer_iin_bin,
     count(DISTINCT b2.benefeciary_key) AS beneficiary_count,
     max(if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2))) AS max_ball3
 FROM ball2_t b2

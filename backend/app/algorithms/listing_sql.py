@@ -65,6 +65,7 @@ def _scored_cte(
         f"'{code}'" for code in DOP_INFO_FIRST_PART_ALGORITHMS
     )
     iin_clean = cleaning.clean_iin("u.benefeciary_iin_bin")
+    foreign_id = cleaning.foreign_identifier("u.benefeciary_iin_bin")
     bin_clean = cleaning.clean_bin("u.taxpayer_iin_bin")
     company_key = cleaning.company_key("bin_clean", "taxpayer_name")
     dop_name = cleaning.display_name("u.dop_info")
@@ -85,6 +86,7 @@ def _scored_cte(
         {bin_clean} AS bin_clean,
         u.taxpayer_name AS taxpayer_name,
         {iin_clean} AS iin_clean,
+        {foreign_id} AS foreign_id,
         {dop_name} AS dop_name,
         u.algorithm_code AS algorithm_code,
         u.priority AS priority,
@@ -99,6 +101,7 @@ base AS (
         bin_clean,
         taxpayer_name,
         iin_clean,
+        foreign_id,
         -- Служебный ключ сведения; в поле ИИН он не показывается
         {key} AS benefeciary_key,
         dop_name,
@@ -358,7 +361,7 @@ def build_beneficiaries_list_sql(
     sort_column = BENEFICIARY_SORT_COLUMNS.get(sort, "max_ball3")
     nonresident_status_expr = cleaning.nonresident_status("pp.status")
     display_iin_expr = cleaning.display_iin_with_id(
-        "r.iin_clean", "r.is_nonresident", "r.dop_info"
+        "r.iin_clean", "r.is_nonresident", "r.dop_info", "r.foreign_id"
     )
     where_clause = ""
     if conditions:
@@ -390,6 +393,7 @@ per_pair AS (
         b.taxpayer_key AS taxpayer_key,
         b.benefeciary_key AS benefeciary_key,
         any(b.iin_clean) AS iin_clean,
+        argMin(b.foreign_id, (if(b.foreign_id != '', 0, 1), b.priority)) AS foreign_id,
         argMin(b.status, b.priority) AS status,
         -- Пара (балл, имя) в ключе сравнения: при равных баллах победитель
         -- иначе выбирался бы произвольно, и один ИИН назывался бы по-разному
@@ -405,6 +409,7 @@ pair_named AS (
         pp.taxpayer_key AS taxpayer_key,
         pp.benefeciary_key AS benefeciary_key,
         pp.iin_clean AS iin_clean,
+        pp.foreign_id AS foreign_id,
         -- Нет настоящего ИИН — лицо нерезидент. Тип БС сохраняется,
         -- добавляется только пометка. Те же правила в карточке компании.
         if(pp.iin_clean = '',
@@ -436,6 +441,7 @@ rolled AS (
     SELECT
         pn.benefeciary_key AS benefeciary_key,
         any(pn.iin_clean) AS iin_clean,
+        argMin(pn.foreign_id, (if(pn.foreign_id != '', 0, 1), pn.min_priority)) AS foreign_id,
         argMin(pn.benefeciary_name, (pn.min_priority, pn.benefeciary_name))
             AS benefeciary_name,
         argMin(pn.status, (pn.min_priority, pn.benefeciary_name)) AS status,
