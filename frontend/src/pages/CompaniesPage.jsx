@@ -12,7 +12,7 @@ import {
   Spinner,
   TableSkeleton,
   number,
-  riskStyle,
+  cardStyle,
   value,
 } from '../components/ui.jsx'
 
@@ -26,7 +26,6 @@ export default function CompaniesPage() {
   const [filters, setFilters] = useState({
     query: searchParams.get('query') || '',
     ownership: searchParams.get('ownership') || '',
-    risk: searchParams.get('risk') || '',
     scope: searchParams.get('scope') || 'registry',
   })
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1)
@@ -48,7 +47,6 @@ export default function CompaniesPage() {
         limit: PAGE_SIZE,
         query: filters.query || undefined,
         ownership: filters.ownership || undefined,
-        risk: filters.risk || undefined,
         scope: filters.scope,
         sort,
         order,
@@ -163,23 +161,6 @@ export default function CompaniesPage() {
             </select>
           </div>
 
-          <div>
-            <label className="label" htmlFor="risk">
-              Уровень риска
-            </label>
-            <select
-              id="risk"
-              className="input"
-              value={filters.risk}
-              onChange={(event) => changeFilter('risk', event.target.value)}
-              disabled={dictionaryScope}
-            >
-              <option value="">Любой</option>
-              <option value="high">Высокий (свыше 70%)</option>
-              <option value="medium">Средний (40–70%)</option>
-              <option value="low">Низкий (до 40%)</option>
-            </select>
-          </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
@@ -268,7 +249,7 @@ export default function CompaniesPage() {
               </thead>
               <tbody>
                 {data.items.map((item) => {
-                  const style = riskStyle(item.max_ball3)
+                  const style = cardStyle()
                   return (
                     <tr
                       key={item.taxpayer_key || item.taxpayer_iin_bin}

@@ -141,8 +141,11 @@ class StatsResponse(BaseModel):
     #: Всего юридических лиц в справочнике, а не только попавших в реестр
     total_companies: int = 0
     companies_with_bs: int = 0
-    high_risk_count: int = 0
-    medium_risk_count: int = 0
-    low_risk_count: int = 0
+    #: Компании, где сильнейший признак — регистрационный (балл 0)
+    registration_companies: int = 0
+    #: Компании, где выявлены только предполагаемые бенефициары
+    assumed_companies: int = 0
+    #: Средний балл приоритетности сильнейшего признака по компаниям
+    avg_priority: float = 0.0
     top_by_beneficiaries: List[TopCompany] = Field(default_factory=list)
-    top_by_risk: List[TopCompany] = Field(default_factory=list)
+    top_by_priority: List[TopCompany] = Field(default_factory=list)

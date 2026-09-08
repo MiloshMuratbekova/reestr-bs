@@ -7,7 +7,7 @@ import {
   ErrorMessage,
   Loading,
   Spinner,
-  riskStyle,
+  cardStyle,
   value,
 } from '../components/ui.jsx'
 
@@ -24,7 +24,7 @@ function StatTile({ label, count }) {
 }
 
 function CompanyRow({ item, onOpen }) {
-  const style = riskStyle(item.max_ball3)
+  const style = cardStyle()
 
   return (
     <button
@@ -46,7 +46,6 @@ function CompanyRow({ item, onOpen }) {
             <span>
               БИН: <span className="font-mono text-slate-700">{value(item.taxpayer_iin_bin)}</span>
             </span>
-            <span>Регион: {value(item.region)}</span>
             <span>Форма: {value(item.category)}</span>
           </div>
         </div>
@@ -69,7 +68,6 @@ export default function SearchPage() {
   const [query, setQuery] = useState(searchParams.get('query') || '')
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
   const [algorithm, setAlgorithm] = useState(searchParams.get('algorithm') || '')
-  const [risk, setRisk] = useState(searchParams.get('risk') || '')
 
   const [results, setResults] = useState([])
   const [searched, setSearched] = useState(false)
@@ -99,7 +97,6 @@ export default function SearchPage() {
           query: params.query.trim(),
           status: params.status || undefined,
           algorithm: params.algorithm || undefined,
-          risk: params.risk || undefined,
           limit: 100,
         })
         setResults(data)
@@ -122,7 +119,6 @@ export default function SearchPage() {
         query: initialQuery,
         status: searchParams.get('status') || '',
         algorithm: searchParams.get('algorithm') || '',
-        risk: searchParams.get('risk') || '',
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -130,7 +126,7 @@ export default function SearchPage() {
 
   const handleSubmit = (event) => {
     event.preventDefault()
-    const params = { query, status: statusFilter, algorithm, risk }
+    const params = { query, status: statusFilter, algorithm }
     const next = {}
     Object.entries(params).forEach(([key, val]) => {
       if (val) next[key] = val
@@ -218,22 +214,6 @@ export default function SearchPage() {
             </select>
           </div>
 
-          <div className="w-full lg:w-44">
-            <label className="label" htmlFor="risk">
-              Уровень риска
-            </label>
-            <select
-              id="risk"
-              className="input"
-              value={risk}
-              onChange={(e) => setRisk(e.target.value)}
-            >
-              <option value="">Любой</option>
-              <option value="high">Высокий (свыше 70%)</option>
-              <option value="medium">Средний (40–70%)</option>
-              <option value="low">Низкий (до 40%)</option>
-            </select>
-          </div>
 
           <button type="submit" className="btn-primary lg:w-36" disabled={loading}>
             {loading && <Spinner className="h-4 w-4" />}

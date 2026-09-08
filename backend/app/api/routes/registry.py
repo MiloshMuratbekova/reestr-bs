@@ -61,7 +61,6 @@ async def search(
     limit: int = Query(50, ge=1),
     status_filter: Optional[str] = Query(None, alias="status"),
     algorithm: Optional[str] = Query(None, description="Код алгоритма, например БС-1"),
-    risk: Optional[str] = Query(None, description="high | medium | low"),
 ) -> list[dict]:
     try:
         return await registry_service.search_companies(
@@ -70,7 +69,6 @@ async def search(
             limit=limit,
             status_filter=status_filter,
             algorithm_filter=algorithm,
-            risk_filter=risk,
         )
     except ClickHouseError as exc:
         logger.error("Поиск не выполнен: %s", exc)

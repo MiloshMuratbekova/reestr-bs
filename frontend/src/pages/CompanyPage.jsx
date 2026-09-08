@@ -11,7 +11,7 @@ import {
   Loading,
   Spinner,
   StatusBadge,
-  riskStyle,
+  cardStyle,
   isCompanyBin,
   value,
 } from '../components/ui.jsx'
@@ -27,7 +27,7 @@ const QUICK_QUESTIONS = [
 /* Блок: информация о компании                                                */
 /* -------------------------------------------------------------------------- */
 function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
-  const style = riskStyle(maxBall3)
+  const style = cardStyle()
 
   return (
     <section className="card">
@@ -77,7 +77,7 @@ function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
 /* Блок: карточка одного бенефициара                                          */
 /* -------------------------------------------------------------------------- */
 function BeneficiaryCard({ item, onExplain, explaining }) {
-  const style = riskStyle(item.ball3)
+  const style = cardStyle()
 
   return (
     <div className={`rounded-lg border p-4 ${style.card}`}>

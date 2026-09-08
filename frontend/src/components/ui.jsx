@@ -75,40 +75,32 @@ export function EmptyState({ title, description }) {
 }
 
 /** Цветовая шкала вероятности: >70 — красный, 40–70 — жёлтый, <40 — зелёный. */
-export function riskTone(ball3) {
-  const score = Number(ball3) || 0
-  if (score > 70) return 'high'
-  if (score >= 40) return 'medium'
-  return 'low'
+
+/** Нейтральный вид карточки.
+ *
+ * Прежде карточки красились по «уровню риска» — по доле ball3. Эта шкала
+ * вводила в заблуждение: бенефициар, подтверждённый регистрационным
+ * алгоритмом, получал нулевую долю и красился как безопасный, а
+ * единственный предполагаемый — как опасный просто потому, что один.
+ * Цвет убран, вместо него показывается балл приоритетности.
+ */
+const NEUTRAL_STYLE = {
+  card: 'border-slate-200 bg-white',
+  text: 'text-slate-700',
+  badge: 'bg-slate-100 text-slate-700',
 }
 
-const RISK_STYLES = {
-  high: {
-    card: 'border-red-300 bg-red-50',
-    bar: 'bg-red-500',
-    text: 'text-red-700',
-    badge: 'bg-red-100 text-red-800',
-    label: 'Высокая',
-  },
-  medium: {
-    card: 'border-amber-300 bg-amber-50',
-    bar: 'bg-amber-500',
-    text: 'text-amber-700',
-    badge: 'bg-amber-100 text-amber-800',
-    label: 'Средняя',
-  },
-  low: {
-    card: 'border-emerald-300 bg-emerald-50',
-    bar: 'bg-emerald-500',
-    text: 'text-emerald-700',
-    badge: 'bg-emerald-100 text-emerald-800',
-    label: 'Низкая',
-  },
+export function cardStyle() {
+  return NEUTRAL_STYLE
 }
 
-export function riskStyle(ball3) {
-  return RISK_STYLES[riskTone(ball3)]
+/** Подпись балла приоритетности: чем меньше, тем надёжнее признак. */
+export function priorityLabel(priority) {
+  const score = Number(priority)
+  if (!Number.isFinite(score)) return DASH
+  return score === 0 ? '0 — регистрационный' : String(score)
 }
+
 
 /** Похож ли идентификатор на БИН организации.
  *

@@ -504,17 +504,18 @@ WITH {build_rows_cte(merged_table, columns)},
 {BALLS_CTE},
 per_company AS (
     SELECT
-        s.taxpayer_key AS taxpayer_key,
-        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
-        max(s.ball3) AS max_ball3
-    FROM scored AS s
-    GROUP BY s.taxpayer_key
+        r.taxpayer_key AS taxpayer_key,
+        -- Сильнейший признак по компании: чем меньше балл приоритетности,
+        -- тем надёжнее выявление. Ноль — регистрационный алгоритм.
+        min(r.priority) AS best_priority
+    FROM rows AS r
+    GROUP BY r.taxpayer_key
 )
 SELECT
     count() AS companies_with_bs,
-    countIf(c.max_ball3 > 70) AS high_risk_count,
-    countIf(c.max_ball3 >= 40 AND c.max_ball3 <= 70) AS medium_risk_count,
-    countIf(c.max_ball3 < 40) AS low_risk_count
+    countIf(c.best_priority = 0) AS registration_companies,
+    countIf(c.best_priority > 0) AS assumed_companies,
+    round(avg(c.best_priority), 2) AS avg_priority
 FROM per_company AS c
 """.strip()
 
@@ -522,49 +523,38 @@ FROM per_company AS c
 def build_top_companies_sql(
     merged_table: str, columns: Iterable[str], *, by: str, limit: int = 10
 ) -> str:
-    """Топ компаний по риску либо по числу бенефициаров."""
-    order_column = "max_ball3" if by == "risk" else "beneficiary_count"
+    """Топ компаний: по числу бенефициаров либо по силе признака.
+
+    Балл приоритетности тем меньше, чем надёжнее выявление (ноль —
+    регистрационный алгоритм), поэтому по нему порядок обратный.
+    """
+    if by == "priority":
+        order_column, direction = "best_priority", "ASC"
+    else:
+        order_column, direction = "beneficiary_count", "DESC"
+
     return f"""
 WITH {build_rows_cte(merged_table, columns)},
-{BALLS_CTE},
 per_company AS (
-    SELECT
-        s.taxpayer_key AS taxpayer_key,
-        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
-        max(s.ball3) AS max_ball3
-    FROM scored AS s
-    GROUP BY s.taxpayer_key
-    ORDER BY {order_column} DESC, s.taxpayer_key ASC
-    LIMIT {int(limit)}
-),
-company AS (
     SELECT
         r.taxpayer_key AS taxpayer_key,
         any(r.taxpayer_iin_bin) AS taxpayer_iin_bin,
-        any(r.taxpayer_name) AS taxpayer_name
+        any(r.taxpayer_name) AS taxpayer_name,
+        uniqExact(r.benefeciary_key) AS beneficiary_count,
+        min(r.priority) AS best_priority
     FROM rows AS r
-    WHERE r.taxpayer_key IN (SELECT taxpayer_key FROM per_company)
     GROUP BY r.taxpayer_key
-),
-dict AS (
-    SELECT
-        c.taxpayer_iin_bin AS taxpayer_iin_bin,
-        ifNull(toString(any(c.code_nd)), '') AS code_nd
-    FROM {settings.DICT_COMPANIES} AS c
-    WHERE c.taxpayer_iin_bin IN (SELECT taxpayer_iin_bin FROM company)
-    GROUP BY c.taxpayer_iin_bin
+    ORDER BY {order_column} {direction}, r.taxpayer_key ASC
+    LIMIT {int(limit)}
 )
 SELECT
     p.taxpayer_key AS taxpayer_key,
-    n.taxpayer_iin_bin AS taxpayer_iin_bin,
-    n.taxpayer_name AS taxpayer_name,
-    COALESCE(k.code_nd, '') AS code_nd,
+    p.taxpayer_iin_bin AS taxpayer_iin_bin,
+    p.taxpayer_name AS taxpayer_name,
     p.beneficiary_count AS beneficiary_count,
-    p.max_ball3 AS max_ball3
+    p.best_priority AS best_priority
 FROM per_company AS p
-INNER JOIN company AS n ON p.taxpayer_key = n.taxpayer_key
-LEFT JOIN dict AS k ON n.taxpayer_iin_bin = k.taxpayer_iin_bin
-ORDER BY {order_column} DESC, p.taxpayer_key ASC
+ORDER BY {order_column} {direction}, p.taxpayer_key ASC
 """.strip()
 
 

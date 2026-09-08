@@ -10,7 +10,6 @@ import {
   StatCardSkeleton,
   TableSkeleton,
   number,
-  riskStyle,
   value,
 } from '../components/ui.jsx'
 
@@ -149,10 +148,9 @@ export default function DashboardPage() {
             hint={`нерезидентов: ${number(stats?.nonresident_count)}`}
           />
           <StatCard
-            label="Компаний с высоким риском"
-            value={stats?.high_risk_count}
-            hint="вероятность выше 70%"
-            tone="danger"
+            label="Компаний с регистрационным БС"
+            value={stats?.registration_companies}
+            hint={`только предполагаемые: ${number(stats?.assumed_companies)}`}
           />
         </div>
       )}
@@ -200,8 +198,9 @@ export default function DashboardPage() {
               onOpen={openCompany}
             />
             <TopTable
-              title="Топ-10 компаний по уровню риска"
-              rows={stats?.top_by_risk}
+              title="Топ-10 компаний по силе признака"
+              rows={stats?.top_by_priority}
+              metric="балл приоритетности: чем меньше, тем надёжнее выявление"
               onOpen={openCompany}
             />
           </>

@@ -71,17 +71,6 @@ def _page_bounds(page: int, limit: int) -> Tuple[int, int]:
     return limit, (page - 1) * limit
 
 
-def _risk_condition(risk: Optional[str], column: str) -> Optional[str]:
-    """Условие по уровню риска: тот же диапазон, что и в цветовой шкале."""
-    if risk == "high":
-        return f"{column} > 70"
-    if risk == "medium":
-        return f"{column} >= 40 AND {column} <= 70"
-    if risk == "low":
-        return f"{column} < 40"
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Список юридических лиц
 # ---------------------------------------------------------------------------
@@ -93,7 +82,6 @@ async def list_companies(
     query: Optional[str] = None,
     region: Optional[str] = None,
     ownership: Optional[str] = None,
-    risk: Optional[str] = None,
     scope: str = "registry",
     sort: str = "max_ball3",
     order: str = "desc",
@@ -135,10 +123,6 @@ async def list_companies(
         conditions.append("d.is_state_owned")
     elif ownership == "private":
         conditions.append("NOT d.is_state_owned")
-
-    risk_condition = _risk_condition(risk, "d.max_ball3")
-    if risk_condition:
-        conditions.append(risk_condition)
 
     if sort not in COMPANY_SORT_COLUMNS:
         sort = "max_ball3"
@@ -284,7 +268,6 @@ async def list_beneficiaries(
     query: Optional[str] = None,
     status_filter: Optional[str] = None,
     algorithm: Optional[str] = None,
-    risk: Optional[str] = None,
     nonresident: Optional[bool] = None,
     sort: str = "max_ball3",
     order: str = "desc",
@@ -316,10 +299,6 @@ async def list_beneficiaries(
         conditions.append("r.is_nonresident")
     elif nonresident is False:
         conditions.append("NOT r.is_nonresident")
-
-    risk_condition = _risk_condition(risk, "r.max_ball3")
-    if risk_condition:
-        conditions.append(risk_condition)
 
     if sort not in BENEFICIARY_SORT_COLUMNS:
         sort = "max_ball3"
@@ -765,11 +744,11 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "total_companies": 0,
             "companies_with_bs": 0,
-            "high_risk_count": 0,
-            "medium_risk_count": 0,
-            "low_risk_count": 0,
+            "registration_companies": 0,
+            "assumed_companies": 0,
+            "avg_priority": 0.0,
             "top_by_beneficiaries": [],
-            "top_by_risk": [],
+            "top_by_priority": [],
         }
 
         try:
@@ -804,20 +783,19 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
             payload.update(
                 {
                     "companies_with_bs": int(summary.get("companies_with_bs") or 0),
-                    "high_risk_count": int(summary.get("high_risk_count") or 0),
-                    "medium_risk_count": int(summary.get("medium_risk_count") or 0),
-                    "low_risk_count": int(summary.get("low_risk_count") or 0),
+                    "registration_companies": int(summary.get("registration_companies") or 0),
+                    "assumed_companies": int(summary.get("assumed_companies") or 0),
+                    "avg_priority": round(float(summary.get("avg_priority") or 0), 2),
                 }
             )
         except ClickHouseError as exc:
             logger.error("Сводка дашборда не рассчитана: %s", exc)
 
-        for key, by in (("top_by_beneficiaries", "count"), ("top_by_risk", "risk")):
+        for key, by in (("top_by_beneficiaries", "count"), ("top_by_priority", "priority")):
             try:
                 rows = await clickhouse.fetch_all(top_sql(by))
                 for row in rows:
-                    row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
-                    row["region"] = row.get("code_nd") or ""
+                    row["best_priority"] = int(row.get("best_priority") or 0)
                 payload[key] = rows
             except ClickHouseError as exc:
                 logger.error("Топ компаний (%s) не рассчитан: %s", by, exc)

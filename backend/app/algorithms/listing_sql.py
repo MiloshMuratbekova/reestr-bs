@@ -495,9 +495,9 @@ per_company AS (
 )
 SELECT
     count() AS companies_with_bs,
-    countIf(c.max_ball3 > 70) AS high_risk_count,
-    countIf(c.max_ball3 >= 40 AND c.max_ball3 <= 70) AS medium_risk_count,
-    countIf(c.max_ball3 < 40) AS low_risk_count
+    countIf(c.beneficiary_count > 0) AS registration_companies,
+    0 AS assumed_companies,
+    0 AS avg_priority
 FROM per_company AS c
 """.strip()
 
@@ -507,7 +507,7 @@ def build_top_companies_sql(
     named_tables: Iterable[str] = (),
 ) -> str:
     """Топ компаний — по количеству бенефициаров либо по уровню риска."""
-    order_column = "max_ball3" if by == "risk" else "beneficiary_count"
+    order_column = "beneficiary_count"
     return f"""
 WITH {_scored_cte(result_tables, with_details=False, named_tables=named_tables)},
 per_company AS (

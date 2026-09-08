@@ -36,7 +36,6 @@ async def companies(
     query: Optional[str] = Query(None, description="БИН или часть наименования"),
     region: Optional[str] = Query(None, description="Код региона (code_nd)"),
     ownership: Optional[str] = Query(None, description="state — государственные, private — прочие"),
-    risk: Optional[str] = Query(None, description="high | medium | low"),
     scope: str = Query(
         "registry",
         description=(
@@ -55,7 +54,6 @@ async def companies(
             query=query,
             region=region,
             ownership=ownership,
-            risk=risk,
             scope=scope,
             sort=sort,
             order=order,
@@ -80,7 +78,6 @@ async def beneficiaries(
         None, alias="status", description="registration | assumed"
     ),
     algorithm: Optional[str] = Query(None, description="Код алгоритма, например БС-1"),
-    risk: Optional[str] = Query(None, description="high | medium | low"),
     nonresident: Optional[bool] = Query(None, description="Только нерезиденты либо только резиденты"),
     sort: str = Query("max_ball3"),
     order: str = Query("desc"),
@@ -93,7 +90,6 @@ async def beneficiaries(
             query=query,
             status_filter=status_filter,
             algorithm=algorithm,
-            risk=risk,
             nonresident=nonresident,
             sort=sort,
             order=order,

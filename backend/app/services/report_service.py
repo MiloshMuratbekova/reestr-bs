@@ -102,16 +102,6 @@ TEMPLATES: List[ReportTemplate] = [
         parameters=["limit"],
     ),
     ReportTemplate(
-        key="high_risk",
-        title="Компании с высоким уровнем риска",
-        description=(
-            "Строки реестра, где вероятность выше заданного порога. "
-            "По умолчанию порог 70 процентов — та же граница, что и в цветовой шкале."
-        ),
-        columns=REGISTRY_COLUMNS,
-        parameters=["limit", "threshold"],
-    ),
-    ReportTemplate(
         key="nonresidents",
         title="Бенефициары-нерезиденты",
         description="Строки реестра со статусом, содержащим признак нерезидента.",
@@ -197,11 +187,7 @@ async def _fetch_rows(
         # В прямом чтении баллы уже посчитаны в scored, а статус лежит
         # в самой строке — условия отбора записываются по ним
         direct_extra: List[str] = []
-        if template.key == "high_risk":
-            threshold = float(parameters.get("threshold") or 70)
-            threshold = max(0.0, min(100.0, threshold))
-            direct_extra.append(f"s.ball3 > {threshold}")
-        elif template.key == "nonresidents":
+        if template.key == "nonresidents":
             direct_extra.append("p.status LIKE '%нерезидент%'")
         return await clickhouse.fetch_all(
             direct_sql.build_registry_sql(
@@ -213,13 +199,7 @@ async def _fetch_rows(
         )
 
     extra: List[str] = []
-    if template.key == "high_risk":
-        threshold = float(parameters.get("threshold") or 70)
-        threshold = max(0.0, min(100.0, threshold))
-        # Значение подставляется числом, а не параметром: оно уже приведено
-        # к float и зажато в диапазон, строка сюда попасть не может
-        extra.append(f"if(b1.ball1 = 0, 0, round(b2.ball2 / b1.ball1 * 100, 2)) > {threshold}")
-    elif template.key == "nonresidents":
+    if template.key == "nonresidents":
         extra.append("pr.status LIKE '%нерезидент%'")
 
     sql = build_registry_sql(

@@ -13,7 +13,6 @@ import {
   StatusBadge,
   TableSkeleton,
   number,
-  riskStyle,
   value,
 } from '../components/ui.jsx'
 
@@ -147,7 +146,6 @@ export default function BeneficiariesPage() {
     query: searchParams.get('query') || '',
     status: searchParams.get('status') || '',
     algorithm: searchParams.get('algorithm') || '',
-    risk: searchParams.get('risk') || '',
     nonresident: searchParams.get('nonresident') || '',
   })
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1)
@@ -169,7 +167,6 @@ export default function BeneficiariesPage() {
         query: filters.query || undefined,
         status: filters.status || undefined,
         algorithm: filters.algorithm || undefined,
-        risk: filters.risk || undefined,
         nonresident: filters.nonresident === '' ? undefined : filters.nonresident === 'yes',
         sort,
         order,
@@ -268,22 +265,6 @@ export default function BeneficiariesPage() {
             </select>
           </div>
 
-          <div>
-            <label className="label" htmlFor="risk">
-              Уровень риска
-            </label>
-            <select
-              id="risk"
-              className="input"
-              value={filters.risk}
-              onChange={(event) => changeFilter('risk', event.target.value)}
-            >
-              <option value="">Любой</option>
-              <option value="high">Высокий (свыше 70%)</option>
-              <option value="medium">Средний (40–70%)</option>
-              <option value="low">Низкий (до 40%)</option>
-            </select>
-          </div>
         </div>
 
         <div className="mt-3 border-t border-slate-100 pt-3">
