@@ -576,3 +576,22 @@ WHERE r.taxpayer_key = {{bin:String}} OR r.taxpayer_iin_bin = {{bin:String}}
 GROUP BY r.taxpayer_key
 LIMIT 1
 """.strip()
+
+
+def build_names_by_iin_sql(merged_table: str, columns: Iterable[str]) -> str:
+    """Имена лиц по их ИИН из сводной таблицы.
+
+    Нужно учредителям и руководителям: в их собственных таблицах поля ФИО
+    сплошь и рядом пустые, а в сводной то же лицо уже названо — оно там
+    бенефициар. Брать оттуда честнее, чем показывать прочерк.
+    """
+    return f"""
+WITH {build_rows_cte(merged_table, columns)}
+SELECT
+    r.benefeciary_iin_bin AS iin,
+    argMin(r.benefeciary_name, r.priority) AS name
+FROM rows AS r
+WHERE r.benefeciary_iin_bin IN {{iins:Array(String)}}
+  AND r.benefeciary_name != ''
+GROUP BY r.benefeciary_iin_bin
+""".strip()

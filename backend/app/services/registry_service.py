@@ -122,9 +122,48 @@ async def get_company_info(bin_value: str) -> Optional[Dict[str, Any]]:
     return company
 
 
+async def fill_missing_names(
+    rows: List[Dict[str, Any]], iin_field: str, name_field: str
+) -> List[Dict[str, Any]]:
+    """Дописывает пустые ФИО из сводной таблицы по ИИН.
+
+    В таблицах учредителей и руководителей поля имени часто пустые, а ИИН
+    заполнен. То же лицо обычно есть в сводной таблице как бенефициар,
+    и там оно названо — берём имя оттуда, вместо того чтобы показывать
+    прочерк рядом с известным ИИН.
+    """
+    missing = sorted({
+        str(row.get(iin_field) or "")
+        for row in rows
+        if not str(row.get(name_field) or "").strip()
+        and str(row.get(iin_field) or "").strip()
+    })
+    if not missing:
+        return rows
+
+    source = await algorithm_service.merged_source()
+    if not source:
+        return rows
+
+    merged, columns = source
+    try:
+        found = await clickhouse.fetch_all(
+            direct_sql.build_names_by_iin_sql(merged, columns), {"iins": missing}
+        )
+    except ClickHouseError as exc:
+        logger.warning("Имена по ИИН не получены: %s", exc)
+        return rows
+
+    names = {str(r.get("iin") or ""): str(r.get("name") or "") for r in found}
+    for row in rows:
+        if not str(row.get(name_field) or "").strip():
+            row[name_field] = names.get(str(row.get(iin_field) or ""), "")
+    return rows
+
+
 async def get_founders(bin_value: str) -> List[Dict[str, Any]]:
     """Учредители на последнюю дату актуальности."""
-    return await clickhouse.fetch_all(
+    rows = await clickhouse.fetch_all(
         f"""
         SELECT DISTINCT
             ifNull(toString(f.founder_iin_bin), '') AS founder_iin_bin,
@@ -166,22 +205,23 @@ async def get_founders(bin_value: str) -> List[Dict[str, Any]]:
             GROUP BY taxpayer_iin_bin
         ) AS cf ON ifNull(toString(f.founder_iin_bin), '') = cf.taxpayer_iin_bin
         WHERE f.taxpayer_iin_bin = {{bin:String}}
-          -- Дата берётся последняя ПО ЭТОЙ компании, а не по всей таблице:
-          -- если её сведения не обновлялись в последнюю загрузку, при сравнении
-          -- с общим максимумом учредители пропадали целиком
+          -- Берётся последняя выгрузка по всей таблице, как задано в описании
+          -- источника: в ней лежит несколько выгрузок, и без этого условия
+          -- строки задваиваются. Обратная сторона — компания, которой
+          -- в последней выгрузке нет, останется без учредителей.
           AND f.`_actual_date` = (
               SELECT max(`_actual_date`) FROM {settings.TBL_FOUNDERS}
-              WHERE taxpayer_iin_bin = {{bin:String}}
           )
         ORDER BY founder_name
         """,
         {"bin": bin_value},
     )
+    return await fill_missing_names(rows, "founder_iin_bin", "founder_name")
 
 
 async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
     """Руководители на последнюю дату актуальности."""
-    return await clickhouse.fetch_all(
+    rows = await clickhouse.fetch_all(
         f"""
         SELECT DISTINCT
             ifNull(toString(d.employee_iin_bin), '') AS director_iin_bin,
@@ -204,14 +244,15 @@ async def get_directors(bin_value: str) -> List[Dict[str, Any]]:
             GROUP BY taxpayer_iin_bin
         ) AS pd ON ifNull(toString(d.employee_iin_bin), '') = pd.taxpayer_iin_bin
         WHERE d.taxpayer_iin_bin = {{bin:String}}
+          -- Та же последняя выгрузка по всей таблице
           AND d.`_actual_date` = (
               SELECT max(`_actual_date`) FROM {settings.TBL_DIRECTORS}
-              WHERE taxpayer_iin_bin = {{bin:String}}
           )
         ORDER BY director_name
         """,
         {"bin": bin_value},
     )
+    return await fill_missing_names(rows, "director_iin_bin", "director_name")
 
 
 async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[str, Any]]:
