@@ -76,7 +76,93 @@ function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
 /* -------------------------------------------------------------------------- */
 /* Блок: карточка одного бенефициара                                          */
 /* -------------------------------------------------------------------------- */
-function BeneficiaryCard({ item, onExplain, explaining }) {
+/* -------------------------------------------------------------------------- */
+/* Блок: цепочка косвенного владения (основа БС-5)                            */
+/* -------------------------------------------------------------------------- */
+function ChainBlock({ bin, beneficiary }) {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const load = () => {
+    if (data || loading) return
+    setLoading(true)
+    setError('')
+    registryApi
+      .chains(bin, beneficiary)
+      .then(({ data: payload }) => setData(payload))
+      .catch((err) => setError(errorMessage(err, 'Цепочка владения не загружена')))
+      .finally(() => setLoading(false))
+  }
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next) load()
+  }
+
+  return (
+    <div className="mt-3 rounded border border-slate-200 bg-white/70">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-afm-700"
+      >
+        <span>Цепочка владения (БС-5)</span>
+        <span aria-hidden="true">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100 px-3 py-2 text-xs">
+          {loading && <Loading text="Строим цепочку…" />}
+          {error && <ErrorMessage message={error} />}
+          {data && !data.supported && (
+            <p className="text-slate-500">{data.note}</p>
+          )}
+          {data && data.supported && !data.chains.length && (
+            <p className="text-slate-500">
+              Цепочка не восстановлена: в справочнике учредителей нет пути
+              от компании к этому лицу.
+            </p>
+          )}
+          {data?.chains?.map((chain, index) => (
+            <div key={index} className="mb-3 last:mb-0">
+              <div className="flex flex-wrap items-center gap-1">
+                {chain.nodes.map((node, position) => (
+                  <span key={`${node.iin}-${position}`} className="flex items-center gap-1">
+                    {position > 0 && (
+                      <span className="text-slate-400">
+                        —{node.share != null ? ` ${node.share}% →` : ' →'}
+                      </span>
+                    )}
+                    <span
+                      className={
+                        node.is_company
+                          ? 'rounded bg-slate-100 px-1.5 py-0.5'
+                          : 'rounded bg-afm-100 px-1.5 py-0.5 font-medium'
+                      }
+                      title={node.iin}
+                    >
+                      {node.name || node.iin}
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <div className="mt-1 text-slate-500">
+                Накопленная доля: {chain.acc_share}%
+                {chain.meets_threshold ? ' — порог 25% пройден' : ' — ниже порога 25%'}
+                {`, звеньев: ${chain.depth}`}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BeneficiaryCard({ item, bin, onExplain, explaining }) {
   const style = cardStyle()
 
   return (
@@ -122,6 +208,12 @@ function BeneficiaryCard({ item, onExplain, explaining }) {
         </div>
       )}
 
+      {/* Цепочка показывается только у БС-5: именно он признаёт бенефициаром
+          за косвенное владение, и без звеньев вывод выглядит взятым с потолка */}
+      {(item.algorithm_codes || []).includes('БС-5') && (
+        <ChainBlock bin={bin} beneficiary={item.benefeciary_iin_bin} />
+      )}
+
       <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
         <span>Актуальность: {value(item._actual_date)}</span>
         <button
@@ -165,6 +257,7 @@ function BeneficiariesBlock({ card, onExplain, explainingIin }) {
               <BeneficiaryCard
                 key={`${item.benefeciary_key || item.benefeciary_iin_bin}-${index}`}
                 item={item}
+                bin={card.company?.taxpayer_key || card.company?.taxpayer_iin_bin}
                 onExplain={onExplain}
                 explaining={
                   explainingIin === (item.benefeciary_key || item.benefeciary_iin_bin)

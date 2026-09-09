@@ -370,11 +370,21 @@ async def supports_recursive_cte() -> bool:
             )
             _recursive_cte = True
         except ClickHouseError as exc:
+            text = str(exc)
+            # Отличаем «синтаксис не поддержан» от посторонней неудачи.
+            # Недоступная база или разорванное соединение к рекурсии
+            # отношения не имеют, и запоминать по ним «не умеет» нельзя:
+            # иначе раскрытие юрлиц и цепочки владения останутся
+            # выключенными до перезапуска, хотя сервер их умеет.
+            unsupported = "Syntax error" in text or "SYNTAX_ERROR" in text
             logger.warning(
-                "Сервер не поддерживает WITH RECURSIVE, юрлица не будут "
-                "раскрываться до физлиц: %s",
+                "Проверка WITH RECURSIVE не удалась (%s): %s",
+                "синтаксис не поддержан" if unsupported else "посторонняя ошибка",
                 exc,
             )
+            if not unsupported:
+                _recursive_cte = None
+                return False
             _recursive_cte = False
     return _recursive_cte
 

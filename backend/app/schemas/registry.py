@@ -147,5 +147,8 @@ class StatsResponse(BaseModel):
     assumed_companies: int = 0
     #: Средний балл приоритетности сильнейшего признака по компаниям
     avg_priority: float = 0.0
+    #: Работает ли отбор. Ложь означает, что реестр собран по таблицам
+    #: алгоритмов, где полей для отбора нет, и цифры показаны целиком.
+    filters_supported: bool = False
     top_by_beneficiaries: List[TopCompany] = Field(default_factory=list)
     top_by_priority: List[TopCompany] = Field(default_factory=list)

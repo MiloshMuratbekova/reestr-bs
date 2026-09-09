@@ -11,6 +11,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.algorithms import direct_sql
+from app.algorithms.chain_sql import (
+    build_chain_names_sql,
+    build_ownership_chain_sql,
+)
 from app.algorithms.registry_sql import (
     build_company_name_fallback_sql,
     build_company_summary_sql,
@@ -537,8 +541,15 @@ def _apply_filters(
 # ---------------------------------------------------------------------------
 # Статистика
 # ---------------------------------------------------------------------------
-async def get_stats(session: AsyncSession) -> Dict[str, Any]:
-    """Общая статистика реестра."""
+async def get_stats(
+    session: AsyncSession, filters: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Общая статистика реестра.
+
+    :param filters: отбор строк сводной таблицы (алгоритм, тип БС,
+        нерезиденты, период). Применяется только при прямом чтении:
+        по таблицам алгоритмов такого отбора нет.
+    """
     source = await algorithm_service.merged_source()
     tables = await algorithm_service.active_result_tables(session)
     if not tables and not source:
@@ -556,15 +567,17 @@ async def get_stats(session: AsyncSession) -> Dict[str, Any]:
 
     if source:
         merged, columns = source
-        stats_sql = direct_sql.build_stats_sql(merged, columns)
-        by_algorithm_sql = direct_sql.build_stats_by_algorithm_sql(merged, columns)
+        stats_sql = direct_sql.build_stats_sql(merged, columns, filters)
+        by_algorithm_sql = direct_sql.build_stats_by_algorithm_sql(merged, columns, filters)
+        params = direct_sql.filter_params(filters)
     else:
         named = await algorithm_service.named_result_tables()
         stats_sql = build_stats_sql(tables, named)
         by_algorithm_sql = build_stats_by_algorithm_sql(tables, named)
+        params = {}
 
-    totals = await clickhouse.fetch_one(stats_sql) or {}
-    by_algorithm = await clickhouse.fetch_all(by_algorithm_sql)
+    totals = await clickhouse.fetch_one(stats_sql, params) or {}
+    by_algorithm = await clickhouse.fetch_all(by_algorithm_sql, params)
 
     algorithms = await algorithm_service.list_algorithms(session)
     hints = {a.code: a.name for a in algorithms}
@@ -621,3 +634,77 @@ async def explain_empty(session: AsyncSession, bin_value: str) -> Optional[str]:
     if codes:
         parts.append(f"Сработавшие алгоритмы: {codes}.")
     return " ".join(parts)
+
+
+async def ownership_chains(
+    bin_value: str, beneficiary: Optional[str] = None, limit: int = 200
+) -> Dict[str, Any]:
+    """Цепочки косвенного владения компанией — то, по чему работает БС-5.
+
+    Возвращает пути от компании к её владельцам с долей на каждом шаге
+    и накопленной долей. Если указан ``beneficiary``, остаются только
+    цепочки, оканчивающиеся на нём.
+
+    Пустой список причин не скрывает: в ответе есть ``supported``. Ложь
+    означает, что сервер ClickHouse старее 24.4 и рекурсивный обход
+    ему не по силам — цепочку тогда не построить вовсе.
+    """
+    if not await algorithm_service.supports_recursive_cte():
+        return {
+            "supported": False,
+            "chains": [],
+            "note": (
+                "Сервер ClickHouse не поддерживает рекурсивные запросы, "
+                "цепочку владения построить нельзя. Нужна версия 24.4 или новее."
+            ),
+        }
+
+    try:
+        rows = await clickhouse.fetch_all(
+            build_ownership_chain_sql(),
+            {"bin": bin_value, "lim": clamp_rows(limit, 200)},
+        )
+    except ClickHouseError as exc:
+        logger.error("Цепочка владения для %s не построена: %s", bin_value, exc)
+        return {
+            "supported": True,
+            "chains": [],
+            "note": "Цепочку владения построить не удалось.",
+        }
+
+    if beneficiary:
+        rows = [r for r in rows if (r.get("path") or [""])[-1] == beneficiary]
+
+    codes = sorted({code for row in rows for code in (row.get("path") or [])})
+    names: Dict[str, str] = {}
+    if codes:
+        try:
+            found = await clickhouse.fetch_all(
+                build_chain_names_sql(), {"codes": codes}
+            )
+            names = {str(r.get("iin") or ""): str(r.get("name") or "") for r in found}
+        except ClickHouseError as exc:
+            logger.warning("Имена звеньев цепочки не получены: %s", exc)
+
+    chains = []
+    for row in rows:
+        path = list(row.get("path") or [])
+        shares = [float(x) for x in (row.get("shares") or [])]
+        chains.append({
+            "nodes": [
+                {
+                    "iin": code,
+                    "name": names.get(code, ""),
+                    # Пятый знак справа восьмизначной части — признак из ТЗ
+                    "is_company": len(code) == 12 and code[4] in ("4", "5"),
+                    # Доля, с которой это звено принадлежит предыдущему
+                    "share": shares[index - 1] if index else None,
+                }
+                for index, code in enumerate(path)
+            ],
+            "acc_share": round(float(row.get("acc_share") or 0), 2),
+            "depth": int(row.get("depth") or 0),
+            "ends_with_person": bool(int(row.get("ends_with_person") or 0)),
+            "meets_threshold": bool(int(row.get("meets_threshold") or 0)),
+        })
+    return {"supported": True, "chains": chains, "note": ""}

@@ -466,10 +466,13 @@ LIMIT {int(limit)} OFFSET {int(offset)}
 # ---------------------------------------------------------------------------
 # Показатели
 # ---------------------------------------------------------------------------
-def build_stats_sql(merged_table: str, columns: Iterable[str]) -> str:
+def build_stats_sql(
+    merged_table: str, columns: Iterable[str],
+    filters: Optional[Dict[str, object]] = None,
+) -> str:
     """Общая статистика реестра."""
     return f"""
-WITH {build_rows_cte(merged_table, columns)}
+WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))}
 SELECT
     count() AS total_rows,
     uniqExact(r.taxpayer_key) AS company_count,
@@ -481,10 +484,13 @@ FROM rows AS r
 """.strip()
 
 
-def build_stats_by_algorithm_sql(merged_table: str, columns: Iterable[str]) -> str:
+def build_stats_by_algorithm_sql(
+    merged_table: str, columns: Iterable[str],
+    filters: Optional[Dict[str, object]] = None,
+) -> str:
     """Разрез статистики по алгоритмам."""
     return f"""
-WITH {build_rows_cte(merged_table, columns)}
+WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))}
 SELECT
     r.algorithm_code AS algorithm_code,
     any(r.priority) AS priority,
@@ -497,10 +503,13 @@ ORDER BY r.algorithm_code
 """.strip()
 
 
-def build_dashboard_summary_sql(merged_table: str, columns: Iterable[str]) -> str:
+def build_dashboard_summary_sql(
+    merged_table: str, columns: Iterable[str],
+    filters: Optional[Dict[str, object]] = None,
+) -> str:
     """Сводка для дашборда."""
     return f"""
-WITH {build_rows_cte(merged_table, columns)},
+WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))},
 {BALLS_CTE},
 per_company AS (
     SELECT
@@ -521,7 +530,8 @@ FROM per_company AS c
 
 
 def build_top_companies_sql(
-    merged_table: str, columns: Iterable[str], *, by: str, limit: int = 10
+    merged_table: str, columns: Iterable[str], *, by: str, limit: int = 10,
+    filters: Optional[Dict[str, object]] = None,
 ) -> str:
     """Топ компаний: по числу бенефициаров либо по силе признака.
 
@@ -534,7 +544,7 @@ def build_top_companies_sql(
         order_column, direction = "beneficiary_count", "DESC"
 
     return f"""
-WITH {build_rows_cte(merged_table, columns)},
+WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))},
 per_company AS (
     SELECT
         r.taxpayer_key AS taxpayer_key,
@@ -595,3 +605,60 @@ WHERE r.benefeciary_iin_bin IN {{iins:Array(String)}}
   AND r.benefeciary_name != ''
 GROUP BY r.benefeciary_iin_bin
 """.strip()
+
+
+# ---------------------------------------------------------------------------
+# Отбор для дашборда
+# ---------------------------------------------------------------------------
+#: Что можно отобрать. Все поля лежат в самой сводной таблице, поэтому
+#: условия ставятся при её чтении — до расчёта баллов и сводок, и цифры
+#: на всех карточках оказываются посчитаны по одному и тому же срезу.
+DASHBOARD_FILTERS = ("algorithm", "status", "nonresident", "date_from", "date_to")
+
+
+def build_row_conditions(filters: Optional[Dict[str, object]] = None) -> str:
+    """Условия отбора строк сводной таблицы по значениям фильтров.
+
+    Значения подставляются параметрами запроса, а не текстом: сюда приходит
+    ввод пользователя. Возвращается выражение для ``where`` в
+    :func:`build_rows_cte` — колонки квалифицированы псевдонимом ``m``.
+    """
+    values = filters or {}
+    parts: List[str] = []
+
+    if values.get("algorithm"):
+        parts.append("ifNull(toString(m.algorithm_code), '') = {f_algorithm:String}")
+
+    status = str(values.get("status") or "")
+    if status == "registration":
+        parts.append("ifNull(toString(m.status), '') LIKE 'Регистрационный%'")
+    elif status == "assumed":
+        parts.append("ifNull(toString(m.status), '') LIKE 'Предполагаемый%'")
+
+    nonresident = values.get("nonresident")
+    if nonresident is True:
+        parts.append("positionCaseInsensitive(ifNull(toString(m.status), ''), 'нерезидент') > 0")
+    elif nonresident is False:
+        parts.append("positionCaseInsensitive(ifNull(toString(m.status), ''), 'нерезидент') = 0")
+
+    # Дата актуальности приведена источником к виду ГГГГ-ММ-ДД, поэтому
+    # сравнение строк даёт верный порядок и разбирать её не нужно
+    if values.get("date_from"):
+        parts.append("ifNull(toString(m.`_actual_date`), '') >= {f_date_from:String}")
+    if values.get("date_to"):
+        parts.append("ifNull(toString(m.`_actual_date`), '') <= {f_date_to:String}")
+
+    return " AND ".join(parts)
+
+
+def filter_params(filters: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+    """Параметры запроса под условия из :func:`build_row_conditions`."""
+    values = filters or {}
+    params: Dict[str, str] = {}
+    if values.get("algorithm"):
+        params["f_algorithm"] = str(values["algorithm"])
+    if values.get("date_from"):
+        params["f_date_from"] = str(values["date_from"])
+    if values.get("date_to"):
+        params["f_date_to"] = str(values["date_to"])
+    return params

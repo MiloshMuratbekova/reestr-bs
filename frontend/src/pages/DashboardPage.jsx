@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { errorMessage, registryApi } from '../api/client.js'
 import { BarChart, DonutChart, StatCard } from '../components/charts.jsx'
 import {
   CardSkeleton,
   EmptyState,
   ErrorMessage,
+  InfoMessage,
   PageHeader,
   StatCardSkeleton,
   TableSkeleton,
@@ -74,17 +75,42 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  // Выбранный срез держится в адресе страницы: так его можно сохранить
+  // в закладки и переслать коллеге вместе со ссылкой
+  const [searchParams, setSearchParams] = useSearchParams()
+  const filters = {
+    algorithm: searchParams.get('algorithm') || '',
+    status: searchParams.get('status') || '',
+    nonresident: searchParams.get('nonresident') || '',
+    date_from: searchParams.get('date_from') || '',
+    date_to: searchParams.get('date_to') || '',
+  }
+  const anyFilter = Object.values(filters).some(Boolean)
+
+  const changeFilter = (key, val) => {
+    const next = new URLSearchParams(searchParams)
+    if (val) next.set(key, val)
+    else next.delete(key)
+    setSearchParams(next, { replace: true })
+  }
+
   const load = () => {
     setLoading(true)
     setError('')
     registryApi
-      .stats()
+      .stats({
+        algorithm: filters.algorithm || undefined,
+        status: filters.status || undefined,
+        nonresident: filters.nonresident || undefined,
+        date_from: filters.date_from || undefined,
+        date_to: filters.date_to || undefined,
+      })
       .then(({ data }) => setStats(data))
       .catch((err) => setError(errorMessage(err, 'Не удалось получить статистику реестра')))
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(load, [searchParams])
 
   const openCompany = (bin) => navigate(`/company/${encodeURIComponent(bin)}`)
 
@@ -117,6 +143,113 @@ export default function DashboardPage() {
           Обновить
         </button>
       </PageHeader>
+
+      {/* Отбор применяется сразу ко всем показателям страницы: карточкам,
+          графику и обеим таблицам. Иначе цифры считались бы по разным
+          срезам и не сходились бы между собой. */}
+      <section className="card">
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div>
+            <label className="label" htmlFor="d-algorithm">
+              Алгоритм
+            </label>
+            <select
+              id="d-algorithm"
+              className="input"
+              value={filters.algorithm}
+              onChange={(event) => changeFilter('algorithm', event.target.value)}
+            >
+              <option value="">Все</option>
+              {(stats?.by_algorithm || []).map((row) => (
+                <option key={row.algorithm_code} value={row.algorithm_code}>
+                  {row.algorithm_code}
+                  {row.name ? ` — ${row.name}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="d-status">
+              Тип БС
+            </label>
+            <select
+              id="d-status"
+              className="input"
+              value={filters.status}
+              onChange={(event) => changeFilter('status', event.target.value)}
+            >
+              <option value="">Любой</option>
+              <option value="registration">Регистрационный</option>
+              <option value="assumed">Предполагаемый</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="d-nonresident">
+              Резидентство
+            </label>
+            <select
+              id="d-nonresident"
+              className="input"
+              value={filters.nonresident}
+              onChange={(event) => changeFilter('nonresident', event.target.value)}
+            >
+              <option value="">Все</option>
+              <option value="true">Только нерезиденты</option>
+              <option value="false">Без нерезидентов</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="d-from">
+              Дата актуальности с
+            </label>
+            <input
+              id="d-from"
+              type="date"
+              className="input"
+              value={filters.date_from}
+              onChange={(event) => changeFilter('date_from', event.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="label" htmlFor="d-to">
+              по
+            </label>
+            <input
+              id="d-to"
+              type="date"
+              className="input"
+              value={filters.date_to}
+              onChange={(event) => changeFilter('date_to', event.target.value)}
+            />
+          </div>
+        </div>
+
+        {anyFilter && (
+          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
+            <span className="text-xs text-slate-500">
+              Показатели посчитаны по выбранному срезу
+            </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setSearchParams(new URLSearchParams(), { replace: true })}
+            >
+              Сбросить отбор
+            </button>
+          </div>
+        )}
+      </section>
+
+      {anyFilter && stats && stats.filters_supported === false && (
+        <InfoMessage tone="warning">
+          Отбор не применён: реестр собран по таблицам алгоритмов, а не по сводной
+          таблице — полей для отбора там нет. Показатели приведены целиком.
+        </InfoMessage>
+      )}
 
       {error && <ErrorMessage message={error} onRetry={load} />}
 

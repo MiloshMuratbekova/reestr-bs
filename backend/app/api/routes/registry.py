@@ -160,17 +160,66 @@ async def chat(payload: ChatRequest, session: SessionDep, user: CurrentUser) -> 
     return ChatResponse(answer=result["answer"], duration_ms=result["duration_ms"])
 
 
+@router.get(
+    "/company/{bin_value}/chains",
+    summary="Цепочки косвенного владения компанией (основа БС-5)",
+)
+async def company_chains(
+    bin_value: str,
+    session: SessionDep,
+    _: CurrentUser,
+    beneficiary: Optional[str] = Query(
+        None, description="Оставить только цепочки, ведущие к этому лицу"
+    ),
+) -> dict:
+    """Пути владения от компании к её конечным владельцам.
+
+    БС-5 признаёт бенефициаром физлицо, владеющее косвенно с накопленной
+    долей от 25 процентов, но в результат кладёт только само лицо и итоговую
+    долю. Здесь цепочка восстанавливается по справочнику учредителей, чтобы
+    в карточке было видно каждое звено и долю на нём.
+    """
+    try:
+        return await registry_service.ownership_chains(bin_value, beneficiary)
+    except ClickHouseError as exc:
+        logger.error("Цепочки владения %s не построены: %s", bin_value, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc
+
+
 @router.get("/stats", response_model=StatsResponse, summary="Общая статистика реестра")
-async def stats(session: SessionDep, _: CurrentUser) -> dict:
+async def stats(
+    session: SessionDep,
+    _: CurrentUser,
+    algorithm: Optional[str] = Query(None, description="Код алгоритма"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="registration | assumed"
+    ),
+    nonresident: Optional[bool] = Query(None, description="Только нерезиденты"),
+    date_from: Optional[str] = Query(None, description="Дата актуальности с, ГГГГ-ММ-ДД"),
+    date_to: Optional[str] = Query(None, description="Дата актуальности по, ГГГГ-ММ-ДД"),
+) -> dict:
     """Показатели дашборда.
 
     Помимо общей статистики реестра возвращает разрезы, нужные только
-    дашборду: всего ЮЛ в справочнике, распределение по уровню риска и
+    дашборду: всего ЮЛ в справочнике, разрез по баллу приоритетности и
     два списка топ-10. Они считаются по всему реестру, поэтому держатся
     в памяти процесса несколько минут — см. listing_service.
+
+    Отбор применяется ко ВСЕМ показателям страницы разом: иначе карточки,
+    график и таблицы посчитались бы по разным срезам и не сходились бы
+    между собой.
     """
     try:
-        return await listing_service.dashboard(session)
+        return await listing_service.dashboard(
+            session,
+            {
+                "algorithm": algorithm,
+                "status": status_filter,
+                "nonresident": nonresident,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+        )
     except ClickHouseError as exc:
         logger.error("Статистика не рассчитана: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc

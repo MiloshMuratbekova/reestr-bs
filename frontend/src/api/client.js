@@ -100,8 +100,12 @@ export const registryApi = {
     api.post(`/company/${encodeURIComponent(bin)}/explain`, {
       benefeciary_iin_bin: benefeciaryIinBin,
     }),
+  chains: (bin, beneficiary) =>
+    api.get(`/company/${encodeURIComponent(bin)}/chains`, {
+      params: { beneficiary: beneficiary || undefined },
+    }),
   chat: (bin, message) => api.post('/chat', { bin, message }),
-  stats: () => api.get('/stats'),
+  stats: (params) => api.get('/stats', { params }),
   health: () => api.get('/health'),
 }
 

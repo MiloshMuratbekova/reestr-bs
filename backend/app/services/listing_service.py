@@ -731,13 +731,19 @@ async def list_sources(session: AsyncSession) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Дашборд
 # ---------------------------------------------------------------------------
-async def dashboard(session: AsyncSession) -> Dict[str, Any]:
+async def dashboard(
+    session: AsyncSession, filters: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Показатели и таблицы дашборда.
 
     Собирается поверх общей статистики реестра, к которой добавляются
     разрезы, нужные только этой странице.
+
+    :param filters: отбор строк сводной таблицы. Все карточки, график
+        и обе таблицы считаются по одному и тому же срезу, иначе цифры
+        на странице не сходились бы между собой.
     """
-    stats = await registry_service.get_stats(session)
+    stats = await registry_service.get_stats(session, filters)
     tables = await algorithm_service.active_result_tables(session)
 
     async def compute() -> Dict[str, Any]:
@@ -749,6 +755,9 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
             "avg_priority": 0.0,
             "top_by_beneficiaries": [],
             "top_by_priority": [],
+            # Отбор возможен только при прямом чтении сводной таблицы:
+            # по таблицам алгоритмов таких полей нет
+            "filters_supported": False,
         }
 
         try:
@@ -763,11 +772,14 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
 
         if source:
             merged, columns = source
-            dashboard_sql = direct_sql.build_dashboard_summary_sql(merged, columns)
+            dashboard_sql = direct_sql.build_dashboard_summary_sql(
+                merged, columns, filters
+            )
+            payload["filters_supported"] = True
 
             def top_sql(by: str) -> str:
                 return direct_sql.build_top_companies_sql(
-                    merged, columns, by=by, limit=10
+                    merged, columns, by=by, limit=10, filters=filters
                 )
         else:
             named = await algorithm_service.named_result_tables()
@@ -779,7 +791,9 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
                 )
 
         try:
-            summary = await clickhouse.fetch_one(dashboard_sql) or {}
+            summary = await clickhouse.fetch_one(
+                dashboard_sql, direct_sql.filter_params(filters)
+            ) or {}
             payload.update(
                 {
                     "companies_with_bs": int(summary.get("companies_with_bs") or 0),
@@ -793,7 +807,9 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
 
         for key, by in (("top_by_beneficiaries", "count"), ("top_by_priority", "priority")):
             try:
-                rows = await clickhouse.fetch_all(top_sql(by))
+                rows = await clickhouse.fetch_all(
+                    top_sql(by), direct_sql.filter_params(filters)
+                )
                 for row in rows:
                     row["best_priority"] = int(row.get("best_priority") or 0)
                 payload[key] = rows
@@ -802,5 +818,8 @@ async def dashboard(session: AsyncSession) -> Dict[str, Any]:
 
         return payload
 
-    extra = await cached(f"dashboard:{','.join(sorted(tables))}", compute)
+    key_parts = [f"{k}={filters[k]}" for k in sorted(filters or {}) if filters.get(k) is not None]
+    extra = await cached(
+        f"dashboard:{','.join(sorted(tables))}:{'|'.join(key_parts)}", compute
+    )
     return {**stats, **extra}
