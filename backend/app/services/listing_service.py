@@ -83,8 +83,8 @@ async def list_companies(
     region: Optional[str] = None,
     ownership: Optional[str] = None,
     scope: str = "registry",
-    sort: str = "max_ball3",
-    order: str = "desc",
+    sort: str = "priority",
+    order: str = "asc",
 ) -> Dict[str, Any]:
     """Страница списка ЮЛ.
 
@@ -125,7 +125,7 @@ async def list_companies(
         conditions.append("NOT d.is_state_owned")
 
     if sort not in COMPANY_SORT_COLUMNS:
-        sort = "max_ball3"
+        sort = "priority"
 
     source = await algorithm_service.merged_source()
     if source:
@@ -147,7 +147,7 @@ async def list_companies(
     for row in rows:
         row.pop("total_count", None)
         row["region"] = row.get("code_nd") or ""
-        row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
+        row["best_priority"] = int(row.get("best_priority") or 0)
         row["is_state_owned"] = bool(row.get("is_state_owned"))
 
     return {"items": rows, "total": total, "page": page, "limit": limit, "scope": "registry"}
@@ -246,7 +246,7 @@ async def _list_companies_from_dictionary(
         row["is_state_owned"] = state_owned
         row["region"] = row.get("code_nd") or ""
         row["beneficiary_count"] = 0 if state_owned else int(stats.get("beneficiary_count") or 0)
-        row["max_ball3"] = 0.0 if state_owned else round(float(stats.get("max_ball3") or 0), 2)
+        row["best_priority"] = int(stats.get("best_priority") or 0)
 
     return {
         "items": rows,
@@ -269,8 +269,8 @@ async def list_beneficiaries(
     status_filter: Optional[str] = None,
     algorithm: Optional[str] = None,
     nonresident: Optional[bool] = None,
-    sort: str = "max_ball3",
-    order: str = "desc",
+    sort: str = "priority",
+    order: str = "asc",
 ) -> Dict[str, Any]:
     """Страница списка бенефициаров, свёрнутого по ИИН."""
     limit, offset = _page_bounds(page, limit)
@@ -301,7 +301,7 @@ async def list_beneficiaries(
         conditions.append("NOT r.is_nonresident")
 
     if sort not in BENEFICIARY_SORT_COLUMNS:
-        sort = "max_ball3"
+        sort = "priority"
 
     source = await algorithm_service.merged_source()
     if source:
@@ -326,7 +326,7 @@ async def list_beneficiaries(
     for row in rows:
         row.pop("total_count", None)
         row.pop("dop_info", None)
-        row["max_ball3"] = round(float(row.get("max_ball3") or 0), 2)
+        row["best_priority"] = int(row.get("best_priority") or 0)
         row["is_nonresident"] = bool(int(row.get("is_nonresident") or 0))
 
     return {"items": rows, "total": total, "page": page, "limit": limit}
@@ -374,7 +374,7 @@ def _profile_from_rows(iin: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     name = next((r.get("benefeciary_name") for r in rows if r.get("benefeciary_name")), "")
     companies = sorted(
         rows,
-        key=lambda r: (-float(r.get("ball3") or 0), str(r.get("taxpayer_name") or "")),
+        key=lambda r: (int(r.get("priority") or 0), str(r.get("taxpayer_name") or "")),
     )
     return {
         "benefeciary_key": iin,
@@ -386,7 +386,6 @@ def _profile_from_rows(iin: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         ),
         "benefeciary_name": name,
         "company_count": len({r.get("taxpayer_iin_bin") for r in rows}),
-        "max_ball3": round(max((float(r.get("ball3") or 0) for r in rows), default=0.0), 2),
         "companies": companies,
     }
 
@@ -539,7 +538,6 @@ async def _company_graph(
                     "kind": "beneficiary",
                     "label": row.get("status") or "БС",
                     "share": row.get("share_percentage") or "",
-                    "ball3": round(float(row.get("ball3") or 0), 2),
                     "algorithms": row.get("algorithm_codes") or [],
                 }
             )
@@ -619,7 +617,6 @@ async def _person_graph(session: AsyncSession, iin: str) -> Dict[str, Any]:
                 "kind": "beneficiary",
                 "label": row.get("status") or "БС",
                 "share": row.get("share_percentage") or "",
-                "ball3": round(float(row.get("ball3") or 0), 2),
                 "algorithms": row.get("algorithm_codes") or [],
             }
         )

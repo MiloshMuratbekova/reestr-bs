@@ -16,7 +16,7 @@ class CompanySearchItem(BaseModel):
     ownership_type: str = ""
     is_state_owned: bool = False
     beneficiary_count: int = 0
-    max_ball3: float = 0.0
+    best_priority: int = 0
 
 
 class BeneficiaryOut(BaseModel):
@@ -37,9 +37,6 @@ class BeneficiaryOut(BaseModel):
     document_info: str = ""
     share_percentage: str = ""
     dop_info: str = ""
-    ball1: int = 0
-    ball2: int = 0
-    ball3: float = 0.0
 
     model_config = {"extra": "ignore"}
 
@@ -83,7 +80,7 @@ class CompanyCard(BaseModel):
     director: Optional[DirectorOut] = None
     warning: Optional[str] = None
     beneficiary_count: int = 0
-    max_ball3: float = 0.0
+    best_priority: int = 0
 
 
 class ExplainRequest(BaseModel):
@@ -121,7 +118,7 @@ class TopCompany(BaseModel):
     code_nd: str = ""
     region: str = ""
     beneficiary_count: int = 0
-    max_ball3: float = 0.0
+    best_priority: int = 0
 
     model_config = {"extra": "ignore"}
 

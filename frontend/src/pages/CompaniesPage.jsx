@@ -29,8 +29,8 @@ export default function CompaniesPage() {
     scope: searchParams.get('scope') || 'registry',
   })
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1)
-  const [sort, setSort] = useState(searchParams.get('sort') || 'max_ball3')
-  const [order, setOrder] = useState(searchParams.get('order') || 'desc')
+  const [sort, setSort] = useState(searchParams.get('sort') || 'priority')
+  const [order, setOrder] = useState(searchParams.get('order') || 'asc')
 
   const [data, setData] = useState({ items: [], total: 0, scope: 'registry' })
   const [loading, setLoading] = useState(true)

@@ -13,6 +13,7 @@ import {
   StatusBadge,
   cardStyle,
   isCompanyBin,
+  priorityLabel,
   value,
 } from '../components/ui.jsx'
 
@@ -26,7 +27,7 @@ const QUICK_QUESTIONS = [
 /* -------------------------------------------------------------------------- */
 /* Блок: информация о компании                                                */
 /* -------------------------------------------------------------------------- */
-function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
+function CompanyBlock({ company, beneficiaryCount }) {
   const style = cardStyle()
 
   return (
@@ -62,11 +63,6 @@ function CompanyBlock({ company, beneficiaryCount, maxBall3 }) {
           <Field label="Код региона">{value(company.code_nd)}</Field>
           <Field label="Адрес">{value(company.address)}</Field>
           <Field label="Выявлено бенефициаров">{beneficiaryCount}</Field>
-          <Field label="Максимальная вероятность">
-            <span className={`font-semibold ${style.text}`}>
-              {Number(maxBall3 || 0).toFixed(2)}%
-            </span>
-          </Field>
         </dl>
       </div>
     </section>
@@ -195,9 +191,7 @@ function BeneficiaryCard({ item, bin, onExplain, explaining }) {
           <AlgorithmChips codes={item.algorithm_codes} />
         </Field>
         <Field label="Доля владения">{value(item.share_percentage)}</Field>
-        <Field label="Баллы (ball2 / ball1)">
-          {item.ball2 ?? 0} / {item.ball1 ?? 0}
-        </Field>
+        <Field label="Балл приоритетности">{priorityLabel(item.priority)}</Field>
         <Field label="Документ">{value(item.document_info)}</Field>
       </dl>
 
@@ -580,7 +574,6 @@ export default function CompanyPage() {
       <CompanyBlock
         company={card.company}
         beneficiaryCount={card.beneficiary_count}
-        maxBall3={card.max_ball3}
       />
 
       <BeneficiariesBlock

@@ -69,7 +69,7 @@ COMPANY_SORT_COLUMNS = {
     "code_nd": "d.code_nd",
     "ownership_type": "d.ownership_type",
     "beneficiary_count": "d.beneficiary_count",
-    "max_ball3": "d.max_ball3",
+    "priority": "d.best_priority",
     "reg_start_date": "d.reg_start_date",
 }
 
@@ -79,7 +79,7 @@ BENEFICIARY_SORT_COLUMNS = {
     "benefeciary_iin_bin": "r.benefeciary_iin_bin",
     "status": "r.status",
     "company_count": "r.company_count",
-    "max_ball3": "r.max_ball3",
+    "priority": "r.min_priority",
 }
 
 
@@ -313,7 +313,7 @@ def build_companies_list_sql(
     offset: int = 0,
 ) -> str:
     """Страница списка юридических лиц."""
-    sort_column = COMPANY_SORT_COLUMNS.get(sort, "d.max_ball3")
+    sort_column = COMPANY_SORT_COLUMNS.get(sort, "d.best_priority")
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     return f"""
@@ -321,11 +321,12 @@ WITH {build_rows_cte(merged_table, columns)},
 {BALLS_CTE},
 summary AS (
     SELECT
-        s.taxpayer_key AS taxpayer_key,
-        count(DISTINCT s.benefeciary_key) AS beneficiary_count,
-        max(s.ball3) AS max_ball3
-    FROM scored AS s
-    GROUP BY s.taxpayer_key
+        r.taxpayer_key AS taxpayer_key,
+        uniqExact(r.benefeciary_key) AS beneficiary_count,
+        -- Сильнейший признак: чем меньше балл, тем надёжнее выявление
+        min(r.priority) AS best_priority
+    FROM rows AS r
+    GROUP BY r.taxpayer_key
 ),
 company AS (
     SELECT
@@ -364,8 +365,7 @@ listed AS (
         COALESCE(k.taxpayer_iin_bin, '') = '' AS is_unknown,
         if(positionCaseInsensitive(COALESCE(w.ownership_type, ''), 'Государственная') > 0,
             0, COALESCE(m.beneficiary_count, 0)) AS beneficiary_count,
-        if(positionCaseInsensitive(COALESCE(w.ownership_type, ''), 'Государственная') > 0,
-            0, COALESCE(m.max_ball3, 0)) AS max_ball3
+        COALESCE(m.best_priority, 0) AS best_priority
     FROM company AS c
     LEFT JOIN summary AS m ON c.taxpayer_key = m.taxpayer_key
     LEFT JOIN dict AS k ON c.taxpayer_iin_bin = k.taxpayer_iin_bin
@@ -383,7 +383,7 @@ SELECT
     d.is_state_owned AS is_state_owned,
     d.is_unknown AS is_unknown,
     d.beneficiary_count AS beneficiary_count,
-    d.max_ball3 AS max_ball3,
+    d.best_priority AS best_priority,
     count() OVER () AS total_count
 FROM listed AS d
 {where_clause}
@@ -403,7 +403,7 @@ def build_beneficiaries_list_sql(
     offset: int = 0,
 ) -> str:
     """Страница списка бенефициаров, свёрнутого по одному лицу."""
-    sort_column = BENEFICIARY_SORT_COLUMNS.get(sort, "r.max_ball3")
+    sort_column = BENEFICIARY_SORT_COLUMNS.get(sort, "r.min_priority")
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     return f"""
@@ -437,11 +437,8 @@ rolled AS (
         arraySort(arrayDistinct(arrayFlatten(groupArray(p.algorithm_codes))))
             AS algorithm_codes,
         count(DISTINCT p.taxpayer_key) AS company_count,
-        max(COALESCE(s.ball3, 0)) AS max_ball3,
         min(p.min_priority) AS min_priority
     FROM per_pair AS p
-    LEFT JOIN scored AS s
-        ON p.taxpayer_key = s.taxpayer_key AND p.benefeciary_key = s.benefeciary_key
     GROUP BY p.benefeciary_key
 )
 SELECT
@@ -452,7 +449,6 @@ SELECT
     r.algorithm_codes AS algorithm_codes,
     arrayStringConcat(r.algorithm_codes, ', ') AS algorithms,
     r.company_count AS company_count,
-    r.max_ball3 AS max_ball3,
     r.is_nonresident AS is_nonresident,
     r.min_priority AS priority,
     count() OVER () AS total_count

@@ -69,14 +69,12 @@ REGISTRY_COLUMNS: List[Column] = [
     Column("benefeciary_name", "Бенефициарный собственник", 38),
     Column("status", "Статус", 28),
     Column("algorithms", "Алгоритмы", 20),
+    Column("priority", "Балл приоритетности", 12),
     Column("share_percentage", "Доля, %", 10),
-    Column("ball3", "Вероятность, %", 12),
     Column("category", "Категория", 18, in_pdf=False),
     Column("ownership_type", "Тип собственности", 24, in_pdf=False),
     Column("document_info", "Документ", 30, in_pdf=False),
     Column("_actual_date", "Дата актуальности", 16, in_pdf=False),
-    Column("ball1", "Балл 1", 8, in_pdf=False),
-    Column("ball2", "Балл 2", 8, in_pdf=False),
     Column("dop_info", "Дополнительно", 50, in_pdf=False),
 ]
 

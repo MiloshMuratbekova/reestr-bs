@@ -73,12 +73,15 @@ def is_state_owned(ownership_type: Optional[str]) -> bool:
 
 
 def sort_beneficiaries(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Сначала регистрационные (priority 0), затем предполагаемые по убыванию ball3."""
+    """Порядок: по силе признака, затем по имени.
+
+    Балл приоритетности растёт с ослаблением признака, поэтому сортировка
+    по возрастанию ставит регистрационных первыми.
+    """
     return sorted(
         rows,
         key=lambda row: (
-            0 if int(row.get("priority") or 0) == 0 else 1,
-            -float(row.get("ball3") or 0),
+            int(row.get("priority") or 0),
             str(row.get("benefeciary_name") or ""),
         ),
     )
@@ -407,7 +410,6 @@ async def get_company_card(session: AsyncSession, bin_value: str) -> Optional[Di
         "director": directors[0] if directors else None,
         "warning": warning,
         "beneficiary_count": len(beneficiaries),
-        "max_ball3": max((float(b.get("ball3") or 0) for b in beneficiaries), default=0.0),
     }
 
 
@@ -421,7 +423,6 @@ async def search_companies(
     limit: int = 50,
     status_filter: Optional[str] = None,
     algorithm_filter: Optional[str] = None,
-    risk_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Поиск компаний по БИН или наименованию с показателями реестра."""
     query = (query or "").strip()
@@ -495,7 +496,7 @@ async def search_companies(
 
         # Для государственных компаний БС не показываются
         beneficiary_count = 0 if state_owned else int(summary.get("beneficiary_count") or 0)
-        max_ball3 = 0.0 if state_owned else float(summary.get("max_ball3") or 0)
+        best_priority = int(summary.get("best_priority") or 0)
 
         results.append(
             {
@@ -503,13 +504,12 @@ async def search_companies(
                 "ownership_type": ownership_type,
                 "is_state_owned": state_owned,
                 "beneficiary_count": beneficiary_count,
-                "max_ball3": round(max_ball3, 2),
-                "region": company.get("code_nd") or "",
+                "best_priority": best_priority,
             }
         )
 
-    results = _apply_filters(results, status_filter=status_filter, risk_filter=risk_filter)
-    results.sort(key=lambda r: (-r["max_ball3"], r.get("taxpayer_name") or ""))
+    results = _apply_filters(results, status_filter=status_filter)
+    results.sort(key=lambda r: (r["best_priority"], r.get("taxpayer_name") or ""))
     return results
 
 
@@ -517,16 +517,8 @@ def _apply_filters(
     rows: List[Dict[str, Any]],
     *,
     status_filter: Optional[str],
-    risk_filter: Optional[str],
 ) -> List[Dict[str, Any]]:
     filtered = rows
-
-    if risk_filter:
-        ranges = {"high": (70.0, 100.1), "medium": (40.0, 70.0), "low": (0.0, 40.0)}
-        bounds = ranges.get(risk_filter)
-        if bounds:
-            low, high = bounds
-            filtered = [r for r in filtered if low <= r["max_ball3"] < high]
 
     if status_filter == "state":
         filtered = [r for r in filtered if r["is_state_owned"]]

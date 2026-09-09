@@ -43,8 +43,8 @@ async def companies(
             "all — весь справочник ЮЛ (сортировка только по его полям)"
         ),
     ),
-    sort: str = Query("max_ball3"),
-    order: str = Query("desc"),
+    sort: str = Query("priority"),
+    order: str = Query("asc"),
 ):
     try:
         return await listing_service.list_companies(
@@ -79,8 +79,8 @@ async def beneficiaries(
     ),
     algorithm: Optional[str] = Query(None, description="Код алгоритма, например БС-1"),
     nonresident: Optional[bool] = Query(None, description="Только нерезиденты либо только резиденты"),
-    sort: str = Query("max_ball3"),
-    order: str = Query("desc"),
+    sort: str = Query("priority"),
+    order: str = Query("asc"),
 ):
     try:
         return await listing_service.list_beneficiaries(

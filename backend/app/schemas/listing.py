@@ -23,7 +23,8 @@ class CompanyListItem(BaseModel):
     #: Компании нет в справочнике ЮЛ — сведения только из реестра
     is_unknown: bool = False
     beneficiary_count: int = 0
-    max_ball3: float = 0
+    #: Сильнейший признак: чем меньше балл, тем надёжнее выявление
+    best_priority: int = 0
 
 
 class CompanyListResponse(BaseModel):
@@ -44,7 +45,8 @@ class BeneficiaryListItem(BaseModel):
     algorithm_codes: List[str] = Field(default_factory=list)
     algorithms: str = ""
     company_count: int = 0
-    max_ball3: float = 0
+    #: Сильнейший признак: чем меньше балл, тем надёжнее выявление
+    best_priority: int = 0
     is_nonresident: bool = False
     priority: int = 0
 
@@ -74,7 +76,6 @@ class GraphEdge(BaseModel):
     kind: str = Field(description="founder, director либо beneficiary")
     label: str = ""
     share: str = ""
-    ball3: Optional[float] = None
     algorithms: List[str] = Field(default_factory=list)
 
 
