@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { errorMessage, listingApi } from '../api/client.js'
+import Portrait from '../components/Portrait.jsx'
 import { ALGORITHM_OPTIONS, ALGORITHM_TITLES } from '../algorithms.js'
 import {
   AlgorithmChips,
@@ -25,6 +26,7 @@ function ProfilePanel({ iin, onClose }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [tab, setTab] = useState('companies')
 
   useEffect(() => {
     if (!iin) return undefined
@@ -74,11 +76,33 @@ function ProfilePanel({ iin, onClose }) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4">
-          {loading && <Loading text="Загрузка профиля…" />}
-          {error && <ErrorMessage message={error} />}
+        {/* Две вкладки: компании, где лицо выявлено, и справка по витринам */}
+        <div className="flex gap-1 border-b border-slate-200 px-6 pt-2">
+          {[
+            ['companies', 'Компании'],
+            ['portrait', 'Портрет'],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              className={`rounded-t px-3 py-2 text-sm ${
+                tab === key
+                  ? 'border-b-2 border-afm-600 font-medium text-afm-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-          {!loading && profile && (
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {tab === 'portrait' && <Portrait iin={iin} />}
+          {tab === 'companies' && loading && <Loading text="Загрузка профиля…" />}
+          {tab === 'companies' && error && <ErrorMessage message={error} />}
+
+          {tab === 'companies' && !loading && profile && (
             <>
               <div className="mb-4 grid grid-cols-2 gap-3">
                 <div className="rounded-md bg-slate-50 px-4 py-3">

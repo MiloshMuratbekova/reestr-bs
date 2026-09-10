@@ -17,7 +17,7 @@ from app.schemas.registry import (
     ExplainResponse,
     StatsResponse,
 )
-from app.services import ai_service, listing_service, registry_service
+from app.services import ai_service, portrait_service, listing_service, registry_service
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["Реестр БС"])
@@ -183,6 +183,28 @@ async def company_chains(
         return await registry_service.ownership_chains(bin_value, beneficiary)
     except ClickHouseError as exc:
         logger.error("Цепочки владения %s не построены: %s", bin_value, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc
+
+
+@router.get(
+    "/portrait",
+    summary="Портрет лица: всё, что о нём известно витринам",
+)
+async def portrait(
+    _: CurrentUser,
+    iin: str = Query(..., description="ИИН лица"),
+) -> dict:
+    """Справка по одному лицу, собранная из витрин одновременными запросами.
+
+    Блоки: сведения и соседи, доходы, активы, долги, финансовый мониторинг,
+    метки реестров риска, особые учёты. У каждого блока есть признак
+    доступности витрины: пустой блок при недоступном источнике и пустой блок
+    при отсутствии сведений — разные вещи.
+    """
+    try:
+        return await portrait_service.build_portrait(iin)
+    except ClickHouseError as exc:
+        logger.error("Портрет %s не собран: %s", iin, exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc
 
 

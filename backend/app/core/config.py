@@ -154,6 +154,35 @@ class Settings(BaseSettings):
     DICT_OWNERSHIP: str = "AFM_2_1.AFM_2_1_8"
     DICT_DOCUMENTS: str = "AFM_2_1.AFM_2_1_59"
     DICT_SHARES: str = "AFM_6_TEST.AFM_6_1_5_1"
+    # ------------------------------------------------------------------
+    # Портрет бенефициара: витрины по одному лицу
+    #
+    # Имена вынесены в настройки, потому что часть витрин лежит в базе
+    # по умолчанию, а часть — в pfr_dashboard, и на разных стендах это
+    # различается. Если таблицы нет по указанному имени, служба портрета
+    # пробует её же в pfr_dashboard и наоборот, а не найдя — просто
+    # пропускает блок: портрет собирается из того, что доступно.
+    # ------------------------------------------------------------------
+    PORTRAIT_FINMON: str = "asloy"
+    PORTRAIT_PENSION: str = "imp_pension_fl_contr_temp"
+    PORTRAIT_SALARY: str = "fno_200_05"
+    PORTRAIT_GOV: str = "gu_rabotniki"
+    PORTRAIT_ASSETS: str = "active_overall_05_2025_3"
+    PORTRAIT_ADDRESS: str = "mesto_propisky_location"
+    PORTRAIT_NARCO: str = "non"
+    PORTRAIT_DESTRUCTIVE: str = "nko_drt"
+    PORTRAIT_SPECIAL: str = "figurant.mz_i"
+    PORTRAIT_DEBTS: str = "pfr_dashboard.dolzhniki"
+    PORTRAIT_INVALID: str = "pfr_dashboard.invalid"
+    PORTRAIT_ERDR: str = "pfr_dashboard.erdr"
+
+    #: Сколько сообщений финмониторинга берётся на одно лицо
+    PORTRAIT_FINMON_LIMIT: int = 500
+    #: Сколько жильцов по адресу просматривается
+    PORTRAIT_NEIGHBOURS_LIMIT: int = 300
+    #: Начиная со скольких жильцов дом считается многоквартирным
+    PORTRAIT_APARTMENT_HOUSE: int = 12
+
     TBL_FOUNDERS: str = "AFM_2_1_TEST.AFM_2_1_5_1"
     TBL_DIRECTORS: str = "AFM_2_1_TEST.AFM_2_1_6_1"
 
