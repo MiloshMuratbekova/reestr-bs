@@ -9,7 +9,10 @@
 # =============================================================================
 
 param(
-    [string]$Version = "1.0"
+    [string]$Version = "1.0",
+    # Пароль администратора для этой сборки. Пусто — будет выдан случайный
+    # и показан в конце. Постоянного пароля в репозитории быть не должно.
+    [string]$AdminPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,10 +100,21 @@ Remove-Item $imagesTar -Force
 
 # --- 5. Конфигурация с сгенерированными секретами --------------------------
 Write-Host "==> Копирование .env" -ForegroundColor Cyan
-# Пароли постоянные и лежат в .env.example. Генерация убрана намеренно:
-# новый пароль на каждой сборке ломал уже развёрнутую базу — PostgreSQL
-# задаёт его только при создании тома и дальше держит старый.
-Copy-Item "$Root\.env.example" (Join-Path $Stage ".env")
+# Пароль PostgreSQL постоянный и лежит в .env.example. Генерация убрана
+# намеренно: новый пароль на каждой сборке ломал уже развёрнутую базу —
+# PostgreSQL задаёт его только при создании тома и дальше держит старый.
+#
+# А вот пароль администратора интерфейса генерируется: он применяется
+# только при создании учётной записи, развёрнутую базу не ломает, и
+# постоянному паролю в открытом репозитории места нет.
+if (-not $AdminPassword) {
+    $bytes = New-Object byte[] 12
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $AdminPassword = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('/','_').Replace('+','-')
+}
+$envText = Read-PlainUtf8 "$Root\.env.example"
+$envText = $envText -replace '(?m)^FIRST_SUPERUSER_PASSWORD=.*$', "FIRST_SUPERUSER_PASSWORD=$AdminPassword"
+Write-PlainUtf8 (Join-Path $Stage ".env") $envText
 
 Copy-Item "$Root\docker-compose.yml"    $Stage
 Copy-Item "$Root\docker-compose.v2.yml" $Stage
@@ -152,9 +166,14 @@ Write-Host @"
 
  Образы в архиве: $AppImage, $PgImage
 
- Вход в интерфейс отключён (AUTH_ENABLED=false в .env).
- Если включить AUTH_ENABLED=true — вход admin / admin, дальше пароль
- меняется в интерфейсе: кнопка «Сменить пароль» или раздел «Пользователи».
+ Вход в интерфейс включён (AUTH_ENABLED=true в .env).
+   логин:  admin
+   пароль: $AdminPassword
+
+ Пароль записан в .env комплекта и применяется при создании учётной записи.
+ Если база уже развёрнута, учётка не пересоздаётся и пароль остаётся прежним —
+ для аварийного сброса есть ADMIN_PASSWORD_RESET в .env.
+ Смена пароля в интерфейсе: кнопка «Сменить пароль» или раздел «Пользователи».
 
  На сервере (там установлен docker-compose 1.x):
    scp $Bundle user@10.10.31.35:/tmp/

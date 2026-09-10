@@ -8,6 +8,7 @@ ClickHouse 192.168.122.45:8123, Qwen через Ollama 192.168.97.9:11434.
 from __future__ import annotations
 
 import asyncio
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -50,17 +51,40 @@ async def bootstrap() -> None:
         ).scalar_one_or_none()
 
         if admin is None:
+            # Постоянного пароля в открытом репозитории быть не должно:
+            # пустая настройка означает «выдать случайный и показать один раз»
+            generated = not (settings.FIRST_SUPERUSER_PASSWORD or "").strip()
+            first_password = (
+                secrets.token_urlsafe(12)
+                if generated
+                else settings.FIRST_SUPERUSER_PASSWORD
+            )
             session.add(
                 BsUser(
                     username=settings.FIRST_SUPERUSER,
-                    password_hash=hash_password(settings.FIRST_SUPERUSER_PASSWORD),
+                    password_hash=hash_password(first_password),
                     role=UserRole.ADMINISTRATOR.value,
                     full_name="Администратор системы",
                 )
             )
             try:
                 await session.commit()
-                logger.info("Создан администратор по умолчанию: %s", settings.FIRST_SUPERUSER)
+                if generated:
+                    # Пароль показывается ровно один раз — при создании.
+                    # Дальше его знает только тот, кто прочитал журнал.
+                    logger.warning(
+                        "%s\nСоздан администратор: %s\nПароль: %s\n"
+                        "Запишите пароль и смените его в интерфейсе.\n%s",
+                        "=" * 70,
+                        settings.FIRST_SUPERUSER,
+                        first_password,
+                        "=" * 70,
+                    )
+                else:
+                    logger.info(
+                        "Создан администратор %s с паролем из настроек",
+                        settings.FIRST_SUPERUSER,
+                    )
             except IntegrityError:
                 await session.rollback()
                 logger.info("Администратор создан другим процессом приложения")
@@ -69,7 +93,11 @@ async def bootstrap() -> None:
             # Аварийный вход, когда пароль утерян. Запись уже существует,
             # поэтому FIRST_SUPERUSER_PASSWORD сам по себе не применился бы:
             # том с базой переживает обновление образа.
-            admin.password_hash = hash_password(settings.FIRST_SUPERUSER_PASSWORD)
+            reset_password = (settings.FIRST_SUPERUSER_PASSWORD or "").strip()
+            if not reset_password:
+                reset_password = secrets.token_urlsafe(12)
+                logger.warning("Новый пароль администратора: %s", reset_password)
+            admin.password_hash = hash_password(reset_password)
             admin.role = UserRole.ADMINISTRATOR.value
             admin.is_active = True
             await session.commit()
