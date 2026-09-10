@@ -141,7 +141,10 @@ function ProfilePanel({ iin, onClose }) {
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <StatusBadge status={row.status} />
-                          <AlgorithmChips codes={row.algorithm_codes} />
+                          <AlgorithmChips
+                            codes={row.algorithm_codes}
+                            details={row.algorithm_details}
+                          />
                         </div>
                         {row.dop_info && (
                           <div className="mt-2 line-clamp-2 text-xs text-slate-500">

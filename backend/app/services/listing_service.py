@@ -356,7 +356,7 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
             row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
         )
         rows = await clickhouse.fetch_all(sql, {"iin": iin})
-        return _profile_from_rows(iin, rows)
+        return _profile_from_rows(iin, registry_service.fold_algorithm_dates(rows))
 
     sql = build_registry_sql(
         tables,
@@ -366,7 +366,7 @@ async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]
         row_limit=int(runtime.get("MAX_ROWS_PER_CLIENT")),
     )
     rows = await clickhouse.fetch_all(sql, {"iin": iin})
-    return _profile_from_rows(iin, rows)
+    return _profile_from_rows(iin, registry_service.fold_algorithm_dates(rows))
 
 
 def _profile_from_rows(iin: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:

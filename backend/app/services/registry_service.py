@@ -72,6 +72,30 @@ def is_state_owned(ownership_type: Optional[str]) -> bool:
     return bool(ownership_type) and "Государственная" in ownership_type
 
 
+def fold_algorithm_dates(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Сводит пары «алгоритм — дата» к одной, самой поздней, дате на алгоритм.
+
+    Запрос отдаёт все встретившиеся сочетания: у одного алгоритма строк
+    на пару бывает несколько, и даты у них разные. В карточке нужна
+    последняя по каждому алгоритму — она и говорит, насколько свеж признак.
+    """
+    for row in rows:
+        latest: Dict[str, str] = {}
+        for pair in row.pop("algorithm_dates", None) or []:
+            # ClickHouse отдаёт кортеж списком из двух значений
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            code, actual = str(pair[0] or ""), str(pair[1] or "")
+            if not code:
+                continue
+            if actual > latest.get(code, ""):
+                latest[code] = actual
+        row["algorithm_details"] = [
+            {"code": code, "actual_date": latest[code]} for code in sorted(latest)
+        ]
+    return rows
+
+
 def sort_beneficiaries(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Порядок: по силе признака, затем по имени.
 
@@ -277,7 +301,7 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
             ),
             {"bin": bin_value},
         )
-        return sort_beneficiaries(rows)
+        return sort_beneficiaries(fold_algorithm_dates(rows))
 
     tables = await algorithm_service.active_result_tables(session)
     if not tables:
@@ -298,7 +322,7 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
     # Имена, с которыми не справились правила, дочищает модель — уже
     # разобранное берётся из PostgreSQL, к модели идут только новые строки
     await name_service.enrich_names(session, rows)
-    return sort_beneficiaries(rows)
+    return sort_beneficiaries(fold_algorithm_dates(rows))
 
 
 async def company_outside_dictionary(

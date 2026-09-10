@@ -187,8 +187,11 @@ function BeneficiaryCard({ item, bin, onExplain, explaining }) {
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Field label="Алгоритмы">
-          <AlgorithmChips codes={item.algorithm_codes} />
+        <Field label="Алгоритмы и их актуальность">
+          <AlgorithmChips
+            codes={item.algorithm_codes}
+            details={item.algorithm_details}
+          />
         </Field>
         <Field label="Доля владения">{value(item.share_percentage)}</Field>
         <Field label="Балл приоритетности">{priorityLabel(item.priority)}</Field>

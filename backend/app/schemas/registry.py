@@ -30,6 +30,9 @@ class BeneficiaryOut(BaseModel):
     benefeciary_name: str = ""
     status: str = ""
     algorithm_codes: List[str] = Field(default_factory=list)
+    #: Алгоритм и его собственная дата актуальности: один признак мог быть
+    #: выявлен год назад, другой на прошлой неделе
+    algorithm_details: List[Dict[str, str]] = Field(default_factory=list)
     algorithms: str = ""
     priority: int = 0
     category: str = ""

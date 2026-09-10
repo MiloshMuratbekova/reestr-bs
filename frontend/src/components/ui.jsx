@@ -140,7 +140,34 @@ export function StatusBadge({ status }) {
   )
 }
 
-export function AlgorithmChips({ codes }) {
+/** Алгоритмы, выявившие лицо.
+ *
+ * Если переданы details — рядом с кодом показывается ЕГО дата
+ * актуальности. Общая дата по строке этого не заменяет: один признак мог
+ * быть выявлен год назад, другой на прошлой неделе, и для аналитика это
+ * разные вещи.
+ */
+export function AlgorithmChips({ codes, details }) {
+  const dated = Array.isArray(details) ? details.filter((d) => d && d.code) : []
+  if (dated.length) {
+    return (
+      <div className="flex flex-wrap gap-1">
+        {dated.map((item) => (
+          <span
+            key={item.code}
+            className="badge bg-slate-100 text-slate-700"
+            title={item.actual_date ? `актуально на ${item.actual_date}` : ''}
+          >
+            <span className="font-mono">{item.code}</span>
+            {item.actual_date && (
+              <span className="ml-1 text-slate-500">{item.actual_date}</span>
+            )}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   const list = Array.isArray(codes) ? codes : codes ? [codes] : []
   if (!list.length) return <span className="text-slate-400">{DASH}</span>
   return (

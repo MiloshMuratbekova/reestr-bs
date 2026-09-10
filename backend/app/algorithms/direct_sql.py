@@ -236,6 +236,9 @@ paired AS (
         argMin(r.share_percentage, r.priority) AS share_percentage,
         max(r.is_nonresident) AS is_nonresident,
         arraySort(groupUniqArray(r.algorithm_code)) AS algorithm_codes,
+        -- Дата у каждого алгоритма своя: один признак мог быть выявлен
+        -- год назад, другой на прошлой неделе, и общий максимум это скрывал
+        groupUniqArray(tuple(r.algorithm_code, r.`_actual_date`)) AS algorithm_dates,
         min(r.priority) AS min_priority,
         max(r.`_actual_date`) AS _actual_date
     FROM rows AS r
@@ -253,6 +256,7 @@ SELECT
     p.is_nonresident AS is_nonresident,
     p.status AS status,
     p.algorithm_codes AS algorithm_codes,
+    p.algorithm_dates AS algorithm_dates,
     arrayStringConcat(p.algorithm_codes, ', ') AS algorithms,
     p.min_priority AS priority,
     p.category AS category,

@@ -467,6 +467,8 @@ pairs AS (
         argMin(n.benefeciary_name, (n.priority, n.benefeciary_name)) AS benefeciary_name,
         argMin(n.dop_info, (n.priority, n.benefeciary_name)) AS dop_info,
         arraySort(groupUniqArray(n.algorithm_code)) AS algorithm_codes,
+        -- Своя дата у каждого алгоритма — см. пояснение в direct_sql
+        groupUniqArray(tuple(n.algorithm_code, n.`_actual_date`)) AS algorithm_dates,
         min(n.priority) AS min_priority,
         max(n.`_actual_date`) AS _actual_date
     FROM base AS n
@@ -492,6 +494,7 @@ SELECT
     -- по алгоритму с наименьшим баллом.
     pr.status AS status,
     pr.algorithm_codes AS algorithm_codes,
+    pr.algorithm_dates AS algorithm_dates,
     arrayStringConcat(pr.algorithm_codes, ', ') AS algorithms,
     pr.min_priority AS priority,
     COALESCE({category_expr}, '') AS category,
