@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { errorMessage, registryApi } from '../api/client.js'
+import BeneficiaryProfile from '../components/BeneficiaryProfile.jsx'
 import {
   AlgorithmChips,
   DASH,
@@ -158,7 +159,7 @@ function ChainBlock({ bin, beneficiary }) {
   )
 }
 
-function BeneficiaryCard({ item, bin, onExplain, explaining }) {
+function BeneficiaryCard({ item, bin, onExplain, explaining, onOpenProfile }) {
   const style = cardStyle()
 
   return (
@@ -175,9 +176,15 @@ function BeneficiaryCard({ item, bin, onExplain, explaining }) {
               {value(item.benefeciary_name)}
             </Link>
           ) : (
-            <div className="text-sm font-semibold text-slate-900">
+            /* Физлицо открывает свой профиль: компании, где он выявлен,
+               и портрет по витринам — то же окно, что и в списке БС */
+            <button
+              type="button"
+              onClick={() => onOpenProfile(item.benefeciary_key || item.benefeciary_iin_bin)}
+              className="text-left text-sm font-semibold text-afm-700 hover:underline"
+            >
               {value(item.benefeciary_name)}
-            </div>
+            </button>
           )}
           <div className="mt-0.5 text-xs text-slate-600">
             ИИН: <span className="font-mono">{value(item.benefeciary_iin_bin)}</span>
@@ -230,7 +237,7 @@ function BeneficiaryCard({ item, bin, onExplain, explaining }) {
 /* -------------------------------------------------------------------------- */
 /* Блок: бенефициарные собственники                                           */
 /* -------------------------------------------------------------------------- */
-function BeneficiariesBlock({ card, onExplain, explainingIin }) {
+function BeneficiariesBlock({ card, onExplain, explainingIin, onOpenProfile }) {
   const { beneficiaries, warning } = card
 
   return (
@@ -256,6 +263,7 @@ function BeneficiariesBlock({ card, onExplain, explainingIin }) {
                 item={item}
                 bin={card.company?.taxpayer_key || card.company?.taxpayer_iin_bin}
                 onExplain={onExplain}
+                onOpenProfile={onOpenProfile}
                 explaining={
                   explainingIin === (item.benefeciary_key || item.benefeciary_iin_bin)
                 }
@@ -512,6 +520,8 @@ export default function CompanyPage() {
   const [error, setError] = useState('')
   const [explanation, setExplanation] = useState('')
   const [explainingIin, setExplainingIin] = useState('')
+  // Ключ бенефициара, чей профиль открыт поверх карточки
+  const [profileKey, setProfileKey] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -583,7 +593,10 @@ export default function CompanyPage() {
         card={card}
         onExplain={explainBeneficiary}
         explainingIin={explainingIin}
+        onOpenProfile={setProfileKey}
       />
+
+      <BeneficiaryProfile iin={profileKey} onClose={() => setProfileKey('')} />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ExplainBlock

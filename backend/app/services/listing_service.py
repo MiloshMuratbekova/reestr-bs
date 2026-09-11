@@ -85,6 +85,7 @@ async def list_companies(
     scope: str = "registry",
     sort: str = "priority",
     order: str = "asc",
+    risks: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Страница списка ЮЛ.
 
@@ -130,9 +131,13 @@ async def list_companies(
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
+        # Метки риска проверяются по БИН компании: организация тоже может
+        # числиться должником или фигурантом
+        risk = direct_sql.risk_condition(risks, "d.taxpayer_iin_bin")
         sql = direct_sql.build_companies_list_sql(
-            merged, columns, conditions=conditions, sort=sort,
-            order=order, limit=limit, offset=offset,
+            merged, columns,
+            conditions=conditions + ([risk] if risk else []),
+            sort=sort, order=order, limit=limit, offset=offset,
         )
     else:
         sql = build_companies_list_sql(
@@ -271,6 +276,7 @@ async def list_beneficiaries(
     nonresident: Optional[bool] = None,
     sort: str = "priority",
     order: str = "asc",
+    risks: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Страница списка бенефициаров, свёрнутого по ИИН."""
     limit, offset = _page_bounds(page, limit)
@@ -306,9 +312,11 @@ async def list_beneficiaries(
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
+        risk = direct_sql.risk_condition(risks, "r.benefeciary_iin_bin")
         sql = direct_sql.build_beneficiaries_list_sql(
-            merged, columns, conditions=conditions, sort=sort,
-            order=order, limit=limit, offset=offset,
+            merged, columns,
+            conditions=conditions + ([risk] if risk else []),
+            sort=sort, order=order, limit=limit, offset=offset,
         )
     else:
         sql = build_beneficiaries_list_sql(

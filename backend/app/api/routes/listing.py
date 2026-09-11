@@ -43,6 +43,9 @@ async def companies(
             "all — весь справочник ЮЛ (сортировка только по его полям)"
         ),
     ),
+    risks: Optional[List[str]] = Query(
+        None, description="Метки риска: erdr, invalid, debtor, pdl, ludoman и другие"
+    ),
     sort: str = Query("priority"),
     order: str = Query("asc"),
 ):
@@ -55,6 +58,7 @@ async def companies(
             region=region,
             ownership=ownership,
             scope=scope,
+            risks=risks,
             sort=sort,
             order=order,
         )
@@ -79,6 +83,9 @@ async def beneficiaries(
     ),
     algorithm: Optional[str] = Query(None, description="Код алгоритма, например БС-1"),
     nonresident: Optional[bool] = Query(None, description="Только нерезиденты либо только резиденты"),
+    risks: Optional[List[str]] = Query(
+        None, description="Метки риска: erdr, invalid, debtor, pdl, ludoman и другие"
+    ),
     sort: str = Query("priority"),
     order: str = Query("asc"),
 ):
@@ -91,6 +98,7 @@ async def beneficiaries(
             status_filter=status_filter,
             algorithm=algorithm,
             nonresident=nonresident,
+            risks=risks,
             sort=sort,
             order=order,
         )

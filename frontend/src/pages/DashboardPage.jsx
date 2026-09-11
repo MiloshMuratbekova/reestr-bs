@@ -114,10 +114,25 @@ export default function DashboardPage() {
 
   const openCompany = (bin) => navigate(`/company/${encodeURIComponent(bin)}`)
 
+  // Диаграмма по алгоритмам показывает либо бенефициаров, либо компании.
+  // Это разные величины: один бенефициар может проходить по нескольким
+  // компаниям, и складывать их в один столбик нельзя.
+  const [byAlgorithmMetric, setByAlgorithmMetric] = useState('beneficiaries')
   const algorithmBars = (stats?.by_algorithm || []).map((row) => ({
     label: row.algorithm_code,
-    title: row.name,
-    value: Number(row.beneficiary_count) || 0,
+    title: [
+      row.name,
+      `бенефициаров: ${number(row.beneficiary_count)}`,
+      `ЮЛ: ${number(row.company_count)}`,
+      `регистрационных: ${number(row.registration_count)}`,
+      `предполагаемых: ${number(row.assumed_count)}`,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    value:
+      byAlgorithmMetric === 'companies'
+        ? Number(row.company_count) || 0
+        : Number(row.beneficiary_count) || 0,
   }))
 
   const statusSlices = [
@@ -262,18 +277,18 @@ export default function DashboardPage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
-            label="Всего юридических лиц"
-            value={stats?.total_companies}
-            hint="по справочнику ЮЛ"
-          />
-          <StatCard
-            label="Из них с выявленными БС"
+            label="ЮЛ с выявленными БС"
             value={stats?.companies_with_bs}
             hint={
               stats?.total_companies
-                ? `${((100 * (stats.companies_with_bs || 0)) / stats.total_companies).toFixed(2)}% от всех ЮЛ`
+                ? `${((100 * (stats.companies_with_bs || 0)) / stats.total_companies).toFixed(2)}% от справочника`
                 : undefined
             }
+          />
+          <StatCard
+            label="ЮЛ по ГБДЮЛ"
+            value={stats?.total_companies}
+            hint="всего в справочнике юридических лиц"
           />
           <StatCard
             label="Всего бенефициаров"
@@ -281,7 +296,7 @@ export default function DashboardPage() {
             hint={`нерезидентов: ${number(stats?.nonresident_count)}`}
           />
           <StatCard
-            label="Компаний с регистрационным БС"
+            label="ЮЛ с регистрационным БС"
             value={stats?.registration_companies}
             hint={`только предполагаемые: ${number(stats?.assumed_companies)}`}
           />
@@ -291,11 +306,36 @@ export default function DashboardPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="card lg:col-span-2">
           <div className="card-header">
-            <span className="card-title">Бенефициары по алгоритмам</span>
-            <span className="text-xs text-slate-400">
-              рассчитано алгоритмов: {number(stats?.algorithms_calculated)} из{' '}
-              {number(stats?.algorithms_total)}
+            <span className="card-title">
+              {byAlgorithmMetric === 'companies'
+                ? 'Юридические лица по алгоритмам'
+                : 'Бенефициары по алгоритмам'}
             </span>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded border border-slate-200 text-xs">
+                {[
+                  ['beneficiaries', 'Бенефициары'],
+                  ['companies', 'ЮЛ'],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setByAlgorithmMetric(key)}
+                    className={`px-2 py-1 ${
+                      byAlgorithmMetric === key
+                        ? 'bg-afm-600 text-white'
+                        : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-slate-400">
+                алгоритмов: {number(stats?.algorithms_calculated)} из{' '}
+                {number(stats?.algorithms_total)}
+              </span>
+            </div>
           </div>
           <div className="p-5">
             {loading ? (

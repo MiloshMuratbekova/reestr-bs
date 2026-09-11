@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { errorMessage, listingApi, reportsApi, saveBlob } from '../api/client.js'
+import RiskFilter from '../components/RiskFilter.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import {
   EmptyState,
@@ -28,6 +29,8 @@ export default function CompaniesPage() {
     ownership: searchParams.get('ownership') || '',
     scope: searchParams.get('scope') || 'registry',
   })
+  // Метки риска держим списком: их можно выбрать сразу несколько
+  const [risks, setRisks] = useState(searchParams.getAll('risks'))
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1)
   const [sort, setSort] = useState(searchParams.get('sort') || 'priority')
   const [order, setOrder] = useState(searchParams.get('order') || 'asc')
@@ -48,6 +51,7 @@ export default function CompaniesPage() {
         query: filters.query || undefined,
         ownership: filters.ownership || undefined,
         scope: filters.scope,
+        risks: risks.length ? risks : undefined,
         sort,
         order,
       })
@@ -58,7 +62,7 @@ export default function CompaniesPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters, page, sort, order])
+  }, [filters, risks, page, sort, order])
 
   useEffect(() => {
     load()
@@ -68,6 +72,7 @@ export default function CompaniesPage() {
   // а возврат из карточки компании не сбрасывает фильтры
   useEffect(() => {
     const next = {}
+    if (risks.length) next.risks = risks
     Object.entries({ ...filters, page, sort, order }).forEach(([key, item]) => {
       if (item && !(key === 'page' && item === 1) && !(key === 'scope' && item === 'registry')) {
         next[key] = String(item)
@@ -75,7 +80,7 @@ export default function CompaniesPage() {
     })
     setSearchParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, page, sort, order])
+  }, [filters, risks, page, sort, order])
 
   const changeFilter = (key, item) => {
     setFilters((current) => ({ ...current, [key]: item }))
@@ -161,6 +166,16 @@ export default function CompaniesPage() {
             </select>
           </div>
 
+        </div>
+
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <RiskFilter
+            selected={risks}
+            onChange={(next) => {
+              setRisks(next)
+              setPage(1)
+            }}
+          />
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">

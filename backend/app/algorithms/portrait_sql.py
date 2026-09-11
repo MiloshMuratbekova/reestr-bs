@@ -447,3 +447,36 @@ FROM {table} AS e
 WHERE {_text('e.iin')} = {{iin:String}}
 ORDER BY registered_at DESC
 """.strip()
+
+
+#: Метки риска, по которым можно отбирать списки. Ключ приходит из запроса,
+#: поэтому в SQL подставляется не он, а заранее известное имя таблицы.
+RISK_FILTERS = {
+    "erdr": ("ЕРДР", "pfr_dashboard.erdr", "iin"),
+    "invalid": ("Инвалид", "pfr_dashboard.invalid", "iin"),
+    "debtor": ("Должник", "pfr_dashboard.dolzhniki", "iin_bin"),
+    "pdl": ("ПДЛ", "pfr_dashboard.pdl_2", "iin"),
+    "ludoman": ("Лудоман", "pfr_dashboard.ludomany", "IIN"),
+    "forbes": ("ФОРБС", "pfr_dashboard.forbes_kz", "IIN"),
+    "wanted": ("В розыске", "pfr_dashboard.kpsisu", '"IIN ANALIZIRUEMYI"'),
+    "suspect": ("Подозреваемый", "pfr_dashboard.podozrevayemye", "iin"),
+    "custody": ("Под стражей", "pfr_dashboard.pod_strazhey", "iin"),
+    "prisoner": ("Сиделец", "pfr_dashboard.kuis_03_2026", "iin"),
+    "selflimit": ("Самоограничение", "pfr_dashboard.spisok_samoogranichennyh", "iin"),
+}
+
+
+def build_risk_iins_sql(keys: List[str]) -> str:
+    """Подзапрос: ИИН всех лиц, попавших хотя бы в один из реестров.
+
+    Возвращает пустую строку, если ключи не заданы или незнакомы — тогда
+    отбор просто не применяется. Имена таблиц берутся из словаря выше,
+    ввод пользователя в SQL не попадает.
+    """
+    parts = [
+        f"SELECT {_text('r.' + RISK_FILTERS[key][2])} AS iin"
+        f" FROM {RISK_FILTERS[key][1]} AS r"
+        for key in keys
+        if key in RISK_FILTERS
+    ]
+    return "\n    UNION ALL\n    ".join(parts)

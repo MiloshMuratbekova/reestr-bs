@@ -112,8 +112,12 @@ export const registryApi = {
 
 // --- Списки: ЮЛ, бенефициары, структуры владения, источники ----------------
 export const listingApi = {
-  companies: (params) => api.get('/companies', { params }),
-  beneficiaries: (params) => api.get('/beneficiaries', { params }),
+  // Метки риска уходят повторяющимся параметром risks=...&risks=...,
+  // иначе axios склеит массив в «risks[]» и сервер его не разберёт
+  companies: (params) =>
+    api.get('/companies', { params, paramsSerializer: { indexes: null } }),
+  beneficiaries: (params) =>
+    api.get('/beneficiaries', { params, paramsSerializer: { indexes: null } }),
   beneficiary: (key) => api.get('/beneficiary', { params: { key } }),
   ownership: (id) => api.get(`/ownership/${encodeURIComponent(id)}`),
   sources: () => api.get('/sources'),

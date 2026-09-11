@@ -494,12 +494,20 @@ WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))
 SELECT
     r.algorithm_code AS algorithm_code,
     any(r.priority) AS priority,
+    -- Уникальные: одна компания и один бенефициар считаются единожды,
+    -- сколько бы строк ни дал алгоритм
     uniqExact(r.taxpayer_key) AS company_count,
     uniqExact(r.benefeciary_key) AS beneficiary_count,
+    uniqExactIf(r.benefeciary_key, r.status LIKE 'Регистрационный%')
+        AS registration_count,
+    uniqExactIf(r.benefeciary_key, r.status LIKE 'Предполагаемый%')
+        AS assumed_count,
     count() AS row_count
 FROM rows AS r
 GROUP BY r.algorithm_code
-ORDER BY r.algorithm_code
+-- Порядок БС-1 … БС-24 по числу, а не по алфавиту: иначе БС-10
+-- встаёт раньше БС-2
+ORDER BY toInt32OrZero(extract(r.algorithm_code, '([0-9]+)')), r.algorithm_code
 """.strip()
 
 
@@ -514,16 +522,20 @@ WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))
 per_company AS (
     SELECT
         r.taxpayer_key AS taxpayer_key,
-        -- Сильнейший признак по компании: чем меньше балл приоритетности,
-        -- тем надёжнее выявление. Ноль — регистрационный алгоритм.
+        -- Есть ли у компании хоть один регистрационный бенефициар.
+        -- Считается по статусу, а не по баллу: подпись на карточке
+        -- обещает именно регистрационный БС, и сходиться должно с ней.
+        max(r.status LIKE 'Регистрационный%') AS has_registration,
         min(r.priority) AS best_priority
     FROM rows AS r
     GROUP BY r.taxpayer_key
 )
 SELECT
+    -- Компании считаются по ключу, поэтому каждая учтена один раз,
+    -- сколько бы бенефициаров и алгоритмов у неё ни было
     count() AS companies_with_bs,
-    countIf(c.best_priority = 0) AS registration_companies,
-    countIf(c.best_priority > 0) AS assumed_companies,
+    countIf(c.has_registration) AS registration_companies,
+    countIf(NOT c.has_registration) AS assumed_companies,
     round(avg(c.best_priority), 2) AS avg_priority
 FROM per_company AS c
 """.strip()
@@ -662,3 +674,18 @@ def filter_params(filters: Optional[Dict[str, object]] = None) -> Dict[str, str]
     if values.get("date_to"):
         params["f_date_to"] = str(values["date_to"])
     return params
+
+
+def risk_condition(keys: Optional[List[str]], column: str) -> str:
+    """Условие «лицо попало хотя бы в один из выбранных реестров риска».
+
+    Пустая строка, если метки не выбраны. Реестры опрашиваются подзапросом
+    по настоящему ИИН: у нерезидента с ключом «нерезидент: имя» искать
+    в них нечего, и такие строки условие отсеет само.
+    """
+    from app.algorithms.portrait_sql import build_risk_iins_sql
+
+    inner = build_risk_iins_sql(list(keys or []))
+    if not inner:
+        return ""
+    return f"{column} IN (SELECT iin FROM (\n    {inner}\n))"
