@@ -159,7 +159,12 @@ if (-not (Select-String -Path $readmePath -Pattern ([regex]::Escape($AppImage)) 
 
 # --- 6. Бандл ---------------------------------------------------------------
 Write-Host "==> Упаковка $Bundle" -ForegroundColor Cyan
-tar -cf "$Root\$Bundle" -C $Stage .
+# Путь к tar указывается полностью: если в PATH раньше окажется GNU tar
+# из Git for Windows, он примет «C:\...» за сетевой узел и откажется
+# с «Cannot connect to C: resolve failed».
+$tar = Join-Path $env:SystemRoot "System32\tar.exe"
+if (-not (Test-Path $tar)) { $tar = "tar" }
+& $tar -cf "$Root\$Bundle" -C $Stage .
 if ($LASTEXITCODE -ne 0) { throw "Упаковка бандла завершилась ошибкой" }
 
 $archive = Get-Item "$Root\$Bundle"
