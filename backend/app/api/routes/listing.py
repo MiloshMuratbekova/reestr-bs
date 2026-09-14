@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+# List нужен именно здесь: из-за «from __future__ import annotations»
+# аннотации остаются строками и при запуске не вычисляются. Отсутствие
+# импорта всплывало только в момент запроса с параметром risks — сервер
+# отвечал 500 ещё до обращения к ClickHouse, отчего казалось, что дело
+# в реестрах рисков.
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 

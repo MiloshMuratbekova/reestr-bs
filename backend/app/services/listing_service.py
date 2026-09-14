@@ -167,6 +167,10 @@ async def list_companies(
 
     usable: List[str] = []
     without_risk: Optional[Callable[[List[str]], str]] = None
+    # Метка, чей реестр недоступен, из отбора выпадает. Показать при этом
+    # полный список молча нельзя: выбранный фильтр как бы применён, а на
+    # деле нет, и пользователь примет всех подряд за отобранных.
+    dropped: List[str] = []
 
     source = await algorithm_service.merged_source()
     if source:
@@ -178,6 +182,7 @@ async def list_companies(
         # Несуществующий реестр уронил бы весь список, поэтому в отбор идут
         # только те метки, чьи таблицы есть в базе.
         usable = await portrait_service.available_risk_keys(risks or [])
+        dropped = [key for key in (risks or []) if key not in usable]
         risk = direct_sql.risk_condition_by_beneficiary(
             usable, "d.taxpayer_key", portrait_service.risk_sources(usable)
         )
@@ -199,6 +204,7 @@ async def list_companies(
             limit=limit, offset=offset,
         )
     rows, risk_failed = await _fetch_or_drop_risk(sql, params, without_risk, usable)
+    risk_failed = risk_failed or bool(dropped)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
     for row in rows:
@@ -370,11 +376,16 @@ async def list_beneficiaries(
 
     usable: List[str] = []
     without_risk: Optional[Callable[[List[str]], str]] = None
+    # Метка, чей реестр недоступен, из отбора выпадает. Показать при этом
+    # полный список молча нельзя: выбранный фильтр как бы применён, а на
+    # деле нет, и пользователь примет всех подряд за отобранных.
+    dropped: List[str] = []
 
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
         usable = await portrait_service.available_risk_keys(risks or [])
+        dropped = [key for key in (risks or []) if key not in usable]
         risk = direct_sql.risk_condition(
             usable, "r.benefeciary_iin_bin", portrait_service.risk_sources(usable)
         )
@@ -396,6 +407,7 @@ async def list_beneficiaries(
             limit=limit, offset=offset,
         )
     rows, risk_failed = await _fetch_or_drop_risk(sql, params, without_risk, usable)
+    risk_failed = risk_failed or bool(dropped)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
     # Дочистка имён моделью — та же, что в карточке компании, чтобы список
