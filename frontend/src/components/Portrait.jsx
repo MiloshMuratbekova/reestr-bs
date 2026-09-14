@@ -256,28 +256,88 @@ export default function Portrait({ iin }) {
         empty={!finmon.messages.length}
         hint={
           finmon.messages.length
-            ? `сообщений: ${number(finmon.messages.length)}, подозрительных: ${number(
-                finmon.suspicious_count,
-              )}, на ${money(finmon.total_tenge)}`
+            ? `операций: ${number(finmon.messages.length)}` +
+              `, отправлено ${money(finmon.outgoing_total)}` +
+              `, получено ${money(finmon.incoming_total)}` +
+              `, подозрительных: ${number(finmon.suspicious_count)}`
             : ''
         }
       >
-        <Rows
-          items={finmon.messages.slice(0, 50)}
-          columns={[
-            { key: 'date_oper', title: 'Дата' },
-            { key: 'role', title: 'Роль' },
-            { key: 'counterparty_name', title: 'Контрагент' },
-            { key: 'amount_tenge', title: 'Сумма', render: (r) => money(r.amount_tenge) },
-            { key: 'oper_kind', title: 'Вид' },
-            { key: 'susp', title: 'Признак' },
-          ]}
-        />
-        {finmon.messages.length > 50 && (
-          <p className="mt-1 text-slate-400">
-            Показаны первые 50 из {number(finmon.messages.length)}
-          </p>
-        )}
+        {/* Операции разделены по направлению: по одному контрагенту нельзя
+            понять, деньги ушли или пришли. Роли, где лицо лишь упомянуто,
+            вынесены отдельно — приписывать им направление значило бы
+            выдавать догадку за факт. */}
+        {[
+          ['outgoing', 'Отправлял', finmon.outgoing],
+          ['incoming', 'Получал', finmon.incoming],
+          ['other', 'Упомянут в операции', finmon.other],
+        ]
+          .filter(([, , items]) => items?.length)
+          .map(([key, title, items]) => (
+            <div key={key} className="mb-3 last:mb-0">
+              <div className="mb-1 font-medium text-slate-600">
+                {title} · {number(items.length)}
+              </div>
+              <Rows
+                items={items.slice(0, 50)}
+                columns={[
+                  { key: 'date_oper', title: 'Дата' },
+                  { key: 'oper_code', title: 'Код вида' },
+                  { key: 'oper_kind', title: 'Вид операции' },
+                  {
+                    key: 'amount_tenge',
+                    title: 'Сумма, ₸',
+                    render: (r) => money(r.amount_tenge),
+                  },
+                  {
+                    key: 'amount_currency',
+                    title: 'В валюте',
+                    render: (r) =>
+                      Number(r.amount_currency)
+                        ? `${Number(r.amount_currency).toLocaleString('ru-RU')} ${
+                            r.currency_code || ''
+                          }`
+                        : DASH,
+                  },
+                  {
+                    key: 'sender',
+                    title: 'Отправитель',
+                    render: (r) => (
+                      <div>
+                        <div>{value(r.sender_name)}</div>
+                        <div className="font-mono text-[11px] text-slate-500">
+                          {[r.sender_iin, r.sender_country, r.sender_bank_country]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'receiver',
+                    title: 'Получатель',
+                    render: (r) => (
+                      <div>
+                        <div>{value(r.receiver_name)}</div>
+                        <div className="font-mono text-[11px] text-slate-500">
+                          {[r.receiver_iin, r.receiver_country, r.receiver_bank_country]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  { key: 'susp', title: 'Признак' },
+                  { key: 'cfm_name', title: 'Кто прислал' },
+                ]}
+              />
+              {items.length > 50 && (
+                <p className="mt-1 text-slate-400">
+                  Показаны первые 50 из {number(items.length)}
+                </p>
+              )}
+            </div>
+          ))}
       </Block>
 
       <Block

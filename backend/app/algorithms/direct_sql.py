@@ -470,17 +470,62 @@ def build_stats_sql(
     merged_table: str, columns: Iterable[str],
     filters: Optional[Dict[str, object]] = None,
 ) -> str:
-    """Общая статистика реестра."""
+    """Все числа дашборда одним проходом по сводной таблице.
+
+    Одним запросом намеренно: раньше карточки и круговая диаграмма брались
+    из двух разных запросов, и при малейшем расхождении условий цифры
+    на одной странице переставали сходиться между собой.
+
+    Считается всё уникальным. Строки сводной сначала обеззначиваются
+    через DISTINCT, затем компании сводятся по своему ключу, а лица — по
+    своему: одна компания с двадцатью бенефициарами и десятью алгоритмами
+    остаётся одной компанией.
+
+    Деление на регистрационных и предполагаемых сделано разбиением, а не
+    двумя независимыми условиями: лицо, найденное регистрационным
+    алгоритмом хотя бы раз, считается регистрационным, остальные —
+    предполагаемыми. Поэтому части всегда дают целое, и круговая диаграмма
+    не показывает сумму больше общего числа.
+    """
     return f"""
-WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))}
+WITH {build_rows_cte(merged_table, columns, where=build_row_conditions(filters))},
+-- Обеззначивание: в сводной встречаются полностью одинаковые строки,
+-- и в счёт строк они попадали дважды
+distinct_rows AS (
+    SELECT DISTINCT
+        r.taxpayer_key AS taxpayer_key,
+        r.benefeciary_key AS benefeciary_key,
+        r.algorithm_code AS algorithm_code,
+        r.status AS status,
+        r.is_nonresident AS is_nonresident
+    FROM rows AS r
+),
+per_company AS (
+    SELECT
+        d.taxpayer_key AS taxpayer_key,
+        max(d.status LIKE 'Регистрационный%') AS has_registration
+    FROM distinct_rows AS d
+    GROUP BY d.taxpayer_key
+),
+per_beneficiary AS (
+    SELECT
+        d.benefeciary_key AS benefeciary_key,
+        max(d.status LIKE 'Регистрационный%') AS has_registration,
+        max(d.is_nonresident) AS is_nonresident
+    FROM distinct_rows AS d
+    GROUP BY d.benefeciary_key
+)
 SELECT
-    count() AS total_rows,
-    uniqExact(r.taxpayer_key) AS company_count,
-    uniqExact(r.benefeciary_key) AS beneficiary_count,
-    uniqExactIf(r.benefeciary_key, r.status LIKE 'Регистрационный%') AS registration_count,
-    uniqExactIf(r.benefeciary_key, r.status LIKE 'Предполагаемый%') AS assumed_count,
-    uniqExactIf(r.benefeciary_key, r.is_nonresident) AS nonresident_count
-FROM rows AS r
+    (SELECT count() FROM distinct_rows) AS total_rows,
+    (SELECT count() FROM per_company) AS company_count,
+    (SELECT count() FROM per_company) AS companies_with_bs,
+    (SELECT countIf(has_registration) FROM per_company) AS registration_companies,
+    (SELECT countIf(NOT has_registration) FROM per_company) AS assumed_companies,
+    (SELECT count() FROM per_beneficiary) AS beneficiary_count,
+    (SELECT countIf(has_registration) FROM per_beneficiary) AS registration_count,
+    (SELECT countIf(NOT has_registration) FROM per_beneficiary) AS assumed_count,
+    (SELECT countIf(is_nonresident) FROM per_beneficiary) AS nonresident_count,
+    0 AS avg_priority
 """.strip()
 
 

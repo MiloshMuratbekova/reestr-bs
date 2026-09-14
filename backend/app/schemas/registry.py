@@ -34,6 +34,8 @@ class BeneficiaryOut(BaseModel):
     #: выявлен год назад, другой на прошлой неделе
     algorithm_details: List[Dict[str, str]] = Field(default_factory=list)
     algorithms: str = ""
+    #: Метки реестров риска: должник, инвалид, ЕРДР и прочие
+    risk_labels: List[str] = Field(default_factory=list)
     priority: int = 0
     category: str = ""
     ownership_type: str = ""

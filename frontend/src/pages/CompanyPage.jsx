@@ -190,7 +190,15 @@ function BeneficiaryCard({ item, bin, onExplain, explaining, onOpenProfile }) {
             ИИН: <span className="font-mono">{value(item.benefeciary_iin_bin)}</span>
           </div>
         </div>
-        <StatusBadge status={item.status} />
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          <StatusBadge status={item.status} />
+          {/* Метки реестров риска: видно сразу, не открывая профиль */}
+          {(item.risk_labels || []).map((label) => (
+            <span key={label} className="badge bg-amber-100 text-amber-900">
+              {label}
+            </span>
+          ))}
+        </div>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">

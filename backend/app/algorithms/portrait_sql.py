@@ -95,33 +95,58 @@ def _text(column: str) -> str:
 # Финансовый мониторинг
 # ---------------------------------------------------------------------------
 def build_finmon_sql(table: str) -> str:
-    """Сообщения финмониторинга, где лицо встречается в любой из восьми ролей.
+    """Операции финмониторинга, где встречается лицо.
 
-    Колонок ``opisanie`` и ``dopinfo`` в этой витрине нет — обращение к ним
-    роняло запрос целиком, поэтому их здесь и не должно появиться.
+    Лицо ищется во всех восьми ролях, включая ``MEMBER_MAINCODE``:
+    участником оно бывает чаще всего, и без этой роли справка выходила
+    почти пустой.
+
+    В каждой строке видно обе стороны — отправитель и получатель, — а не
+    только контрагент: по одному контрагенту нельзя понять, деньги ушли
+    или пришли. Направление выведено отдельным полем: продавец и его
+    представитель отправляют, покупатель и его представитель получают.
+
+    Колонок ``opisanie`` и ``dopinfo`` в этой витрине нет — обращение
+    к ним роняло запрос целиком.
     """
     branches: List[str] = []
     for role, title in FINMON_ROLES:
-        side = "SELLER" if role in FINMON_SELLER_SIDE else "CUSTOMER"
+        # Направление по роли: продавец отдаёт, покупатель получает.
+        # Для остальных ролей направление неизвестно — лицо лишь
+        # упомянуто в операции, и выдавать догадку за факт нельзя.
+        if role in ("SELLER", "SELLER_REPRESENTATIVE"):
+            direction = "отправитель"
+        elif role in ("CUSTOMER", "CUSTOMER_REPRESENTATIVE"):
+            direction = "получатель"
+        else:
+            direction = "участник"
+
         branches.append(f"""    SELECT
         '{title}' AS role,
+        '{direction}' AS direction,
         {_text('a.MESS_ID')} AS mess_id,
         {_text('a.DATE_OPER')} AS date_oper,
         toFloat64OrZero({_text('a.OPER_TENGE_AMOUNT')}) AS amount_tenge,
         {_text('a.OPER_CURRENCY_CODE')} AS currency_code,
         toFloat64OrZero({_text('a.OPER_CURRENCY_AMOUNT')}) AS amount_currency,
+        {_text('a.OPER_IDVIEW')} AS oper_code,
         {_text('a.OPER_NAMETYPE')} AS oper_kind,
         {_text('a.OPER_SUSP')} AS susp,
         {_text('a.OPER_SUSP_FIRST')} AS susp_first,
         {_text('a.OPER_SUSP_SECOND')} AS susp_second,
         {_text('a.MESS_OPER_STATUS')} AS status,
         {_text('a.CFM_NAME')} AS cfm_name,
-        {_text(f'a.{role}_UR_NAME')} AS participant_name,
-        {_text(f'a.{side}_UR_NAME')} AS counterparty_name,
-        {_text(f'a.{side}_MAINCODE')} AS counterparty_iin,
-        {_text(f'a.{side}_COUNTRY_RESIDENCE')} AS counterparty_country,
-        {_text(f'a.{side}_BANK_COUNTRY')} AS counterparty_bank_country,
-        {_text(f'a.{side}_BANK_ACCOUNT')} AS counterparty_account
+        -- Обе стороны целиком: кто отправил и кто получил
+        {_text('a.SELLER_UR_NAME')} AS sender_name,
+        {_text('a.SELLER_MAINCODE')} AS sender_iin,
+        {_text('a.SELLER_COUNTRY_RESIDENCE')} AS sender_country,
+        {_text('a.SELLER_BANK_COUNTRY')} AS sender_bank_country,
+        {_text('a.SELLER_BANK_ACCOUNT')} AS sender_account,
+        {_text('a.CUSTOMER_UR_NAME')} AS receiver_name,
+        {_text('a.CUSTOMER_MAINCODE')} AS receiver_iin,
+        {_text('a.CUSTOMER_COUNTRY_RESIDENCE')} AS receiver_country,
+        {_text('a.CUSTOMER_BANK_COUNTRY')} AS receiver_bank_country,
+        {_text('a.CUSTOMER_BANK_ACCOUNT')} AS receiver_account
     FROM {table} AS a
     WHERE {_text(f'a.{role}_MAINCODE')} = {{iin:String}}""")
 

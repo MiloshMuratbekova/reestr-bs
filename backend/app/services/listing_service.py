@@ -35,7 +35,12 @@ from app.algorithms.registry_sql import build_registry_sql
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.db.clickhouse import ClickHouseError, clickhouse
-from app.services import algorithm_service, name_service, registry_service
+from app.services import (
+    algorithm_service,
+    name_service,
+    portrait_service,
+    registry_service,
+)
 from app.services.settings_service import clamp_rows, runtime
 
 logger = get_logger(__name__)
@@ -133,7 +138,10 @@ async def list_companies(
         merged, columns = source
         # Метки риска проверяются по БИН компании: организация тоже может
         # числиться должником или фигурантом
-        risk = direct_sql.risk_condition(risks, "d.taxpayer_iin_bin")
+        # Несуществующий реестр уронил бы весь список, поэтому
+        # в отбор идут только те метки, чьи таблицы есть в базе
+        usable = await portrait_service.available_risk_keys(risks or [])
+        risk = direct_sql.risk_condition(usable, "d.taxpayer_iin_bin")
         sql = direct_sql.build_companies_list_sql(
             merged, columns,
             conditions=conditions + ([risk] if risk else []),
@@ -312,7 +320,8 @@ async def list_beneficiaries(
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
-        risk = direct_sql.risk_condition(risks, "r.benefeciary_iin_bin")
+        usable = await portrait_service.available_risk_keys(risks or [])
+        risk = direct_sql.risk_condition(usable, "r.benefeciary_iin_bin")
         sql = direct_sql.build_beneficiaries_list_sql(
             merged, columns,
             conditions=conditions + ([risk] if risk else []),
@@ -777,9 +786,10 @@ async def dashboard(
 
         if source:
             merged, columns = source
-            dashboard_sql = direct_sql.build_dashboard_summary_sql(
-                merged, columns, filters
-            )
+            # Карточки и круговая диаграмма берут числа из общей статистики:
+            # два запроса по одним данным рано или поздно разойдутся между
+            # собой, а на одной странице это выглядит как ошибка счёта
+            dashboard_sql = ""
             payload["filters_supported"] = True
 
             def top_sql(by: str) -> str:
@@ -795,20 +805,22 @@ async def dashboard(
                     tables, by=by, limit=10, named_tables=named
                 )
 
-        try:
-            summary = await clickhouse.fetch_one(
-                dashboard_sql, direct_sql.filter_params(filters)
-            ) or {}
-            payload.update(
-                {
-                    "companies_with_bs": int(summary.get("companies_with_bs") or 0),
-                    "registration_companies": int(summary.get("registration_companies") or 0),
-                    "assumed_companies": int(summary.get("assumed_companies") or 0),
-                    "avg_priority": round(float(summary.get("avg_priority") or 0), 2),
-                }
-            )
-        except ClickHouseError as exc:
-            logger.error("Сводка дашборда не рассчитана: %s", exc)
+        if dashboard_sql:
+            try:
+                summary = await clickhouse.fetch_one(
+                    dashboard_sql, direct_sql.filter_params(filters)
+                ) or {}
+                payload.update(
+                    {
+                        "companies_with_bs": int(summary.get("companies_with_bs") or 0),
+                        "registration_companies": int(
+                            summary.get("registration_companies") or 0
+                        ),
+                        "assumed_companies": int(summary.get("assumed_companies") or 0),
+                    }
+                )
+            except ClickHouseError as exc:
+                logger.error("Сводка дашборда не рассчитана: %s", exc)
 
         for key, by in (("top_by_beneficiaries", "count"), ("top_by_priority", "priority")):
             try:

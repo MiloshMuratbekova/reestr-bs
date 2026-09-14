@@ -267,6 +267,29 @@ async def build_portrait(iin: str) -> Dict[str, Any]:
         "finmon": {
             "available": data["finmon"][1],
             "messages": data["finmon"][0],
+            # Разделение по направлению: отправлял или получал. Для ролей,
+            # где лицо лишь упомянуто, направление неизвестно — такие
+            # операции вынесены отдельно, а не приписаны к одной из сторон.
+            "outgoing": [
+                r for r in data["finmon"][0]
+                if str(r.get("direction") or "") == "отправитель"
+            ],
+            "incoming": [
+                r for r in data["finmon"][0]
+                if str(r.get("direction") or "") == "получатель"
+            ],
+            "other": [
+                r for r in data["finmon"][0]
+                if str(r.get("direction") or "") == "участник"
+            ],
+            "outgoing_total": round(sum(
+                float(r.get("amount_tenge") or 0) for r in data["finmon"][0]
+                if str(r.get("direction") or "") == "отправитель"
+            ), 2),
+            "incoming_total": round(sum(
+                float(r.get("amount_tenge") or 0) for r in data["finmon"][0]
+                if str(r.get("direction") or "") == "получатель"
+            ), 2),
             "total_tenge": round(
                 sum(float(r.get("amount_tenge") or 0) for r in data["finmon"][0]), 2
             ),
@@ -289,3 +312,86 @@ async def build_portrait(iin: str) -> Dict[str, Any]:
             "erdr_available": data["erdr"][1],
         },
     }
+
+
+#: Какие реестры риска есть в базе. Положительный ответ запоминается,
+#: отрицательный — нет: таблицу могли создать уже после запуска.
+_risk_available: Dict[str, bool] = {}
+
+
+async def available_risk_keys(keys: List[str]) -> List[str]:
+    """Оставляет только те метки, чьи реестры реально существуют.
+
+    Без этой проверки отбор по метке роняет весь список: ClickHouse
+    отказывает всему запросу из-за одной несуществующей таблицы, и
+    пользователь видит пустой экран с ошибкой вместо данных.
+    """
+    from app.algorithms.portrait_sql import RISK_FILTERS
+
+    result: List[str] = []
+    for key in keys or []:
+        if key not in RISK_FILTERS:
+            continue
+        if _risk_available.get(key):
+            result.append(key)
+            continue
+
+        _label, table, _column = RISK_FILTERS[key]
+        database, name = table.split(".", 1)
+        try:
+            exists = await clickhouse.table_exists(database, name)
+        except ClickHouseError as exc:
+            logger.warning("Реестр %s не проверен: %s", table, exc)
+            continue
+        if exists:
+            _risk_available[key] = True
+            result.append(key)
+        else:
+            logger.info("Реестр %s недоступен — отбор по метке пропущен", table)
+    return result
+
+
+async def risk_labels_for(iins: List[str]) -> Dict[str, List[str]]:
+    """Метки реестров риска сразу для многих лиц: ИИН → список меток.
+
+    Нужно карточке компании, где бенефициаров бывает десяток: спрашивать
+    реестры на каждого по отдельности значило бы десятки запросов вместо
+    одного. Опрашиваются только существующие реестры.
+    """
+    codes = sorted({str(i or "") for i in iins if str(i or "").strip()})
+    if not codes:
+        return {}
+
+    available = []
+    for table, column, label in ps.RISK_REGISTRIES:
+        database, name = table.split(".", 1)
+        try:
+            if await clickhouse.table_exists(database, name):
+                available.append((table, column, label))
+        except ClickHouseError:
+            continue
+    if not available:
+        return {}
+
+    parts = [
+        f"SELECT ifNull(toString(r.{column}), '') AS iin, '{label}' AS label"
+        f" FROM {table} AS r"
+        f" WHERE ifNull(toString(r.{column}), '') IN {{iins:Array(String)}}"
+        for table, column, label in available
+    ]
+    sql = "\n    UNION ALL\n    ".join(parts)
+    try:
+        rows = await clickhouse.fetch_all(sql, {"iins": codes})
+    except ClickHouseError as exc:
+        logger.warning("Метки риска для списка лиц не получены: %s", exc)
+        return {}
+
+    result: Dict[str, List[str]] = {}
+    for row in rows:
+        iin = str(row.get("iin") or "")
+        label = str(row.get("label") or "")
+        if iin and label and label not in result.setdefault(iin, []):
+            result[iin].append(label)
+    for labels in result.values():
+        labels.sort()
+    return result

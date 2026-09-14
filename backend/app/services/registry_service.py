@@ -96,6 +96,23 @@ def fold_algorithm_dates(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+async def attach_risk_labels(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Дописывает каждому бенефициару его метки реестров риска.
+
+    Метки нужны прямо в карточке компании: аналитику важно видеть, что
+    среди выявленных есть должник или фигурант ЕРДР, не открывая профиль
+    каждого по очереди. Реестры опрашиваются одним запросом на весь список.
+    """
+    from app.services import portrait_service
+
+    labels = await portrait_service.risk_labels_for(
+        [str(r.get("benefeciary_iin_bin") or "") for r in rows]
+    )
+    for row in rows:
+        row["risk_labels"] = labels.get(str(row.get("benefeciary_iin_bin") or ""), [])
+    return rows
+
+
 def sort_beneficiaries(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Порядок: по силе признака, затем по имени.
 
@@ -301,7 +318,7 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
             ),
             {"bin": bin_value},
         )
-        return sort_beneficiaries(fold_algorithm_dates(rows))
+        return sort_beneficiaries(await attach_risk_labels(fold_algorithm_dates(rows)))
 
     tables = await algorithm_service.active_result_tables(session)
     if not tables:
@@ -322,7 +339,7 @@ async def get_beneficiaries(session: AsyncSession, bin_value: str) -> List[Dict[
     # Имена, с которыми не справились правила, дочищает модель — уже
     # разобранное берётся из PostgreSQL, к модели идут только новые строки
     await name_service.enrich_names(session, rows)
-    return sort_beneficiaries(fold_algorithm_dates(rows))
+    return sort_beneficiaries(await attach_risk_labels(fold_algorithm_dates(rows)))
 
 
 async def company_outside_dictionary(
