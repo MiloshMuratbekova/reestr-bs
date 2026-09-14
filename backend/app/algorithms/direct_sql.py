@@ -738,3 +738,31 @@ def risk_condition(
     if not inner:
         return ""
     return f"{column} IN (SELECT iin FROM (\n    {inner}\n))"
+
+
+def risk_condition_by_beneficiary(
+    keys: Optional[List[str]],
+    column: str = "d.taxpayer_key",
+    sources: Optional[Dict[str, object]] = None,
+) -> str:
+    """Условие «у компании есть бенефициар с выбранной меткой риска».
+
+    Для списка ЮЛ отбор идёт не по БИН самой компании: реестры рисков —
+    списки физических лиц, и БИН организации в них почти никогда не
+    встречается, отчего отобранный список выходил пустым. Спрашивают же
+    другое: показать компании, у которых рисковый бенефициар. Поэтому
+    метки проверяются по бенефициарам, а компания отбирается по ключу.
+    """
+    from app.algorithms.portrait_sql import build_risk_iins_sql
+
+    inner = build_risk_iins_sql(list(keys or []), sources)
+    if not inner:
+        return ""
+    return (
+        f"{column} IN (\n"
+        "    SELECT r.taxpayer_key FROM rows AS r\n"
+        "    WHERE r.benefeciary_iin_bin IN (SELECT iin FROM (\n"
+        f"    {inner}\n"
+        "    ))\n"
+        ")"
+    )

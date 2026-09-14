@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     # ---------------- Приложение ----------------
     APP_NAME: str = "Реестр БС"
+    #: Версия развёрнутой сборки. Проставляется при упаковке комплекта
+    #: и видна в /api/health: без неё нельзя понять, тот ли образ
+    #: запущен на сервере, и починка проверяется вслепую.
+    APP_VERSION: str = "dev"
     APP_ENV: str = "production"
     DEBUG: bool = False
     API_PREFIX: str = "/api"

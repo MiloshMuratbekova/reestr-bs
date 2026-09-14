@@ -171,13 +171,15 @@ async def list_companies(
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
-        # Метки риска проверяются по БИН компании: организация тоже может
-        # числиться должником или фигурантом
-        # Несуществующий реестр уронил бы весь список, поэтому
-        # в отбор идут только те метки, чьи таблицы есть в базе
+        # Метки риска проверяются по бенефициарам компании, а не по её БИН:
+        # реестры рисков — списки физических лиц, и БИН организации в них
+        # почти не встречается. Спрашивают «покажи ЮЛ, у которых рисковый
+        # бенефициар», и отбор по БИН на этот вопрос отвечал пустым списком.
+        # Несуществующий реестр уронил бы весь список, поэтому в отбор идут
+        # только те метки, чьи таблицы есть в базе.
         usable = await portrait_service.available_risk_keys(risks or [])
-        risk = direct_sql.risk_condition(
-            usable, "d.taxpayer_iin_bin", portrait_service.risk_sources(usable)
+        risk = direct_sql.risk_condition_by_beneficiary(
+            usable, "d.taxpayer_key", portrait_service.risk_sources(usable)
         )
 
         def build(extra: List[str]) -> str:

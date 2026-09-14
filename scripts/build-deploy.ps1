@@ -114,6 +114,14 @@ if (-not $AdminPassword) {
 }
 $envText = Read-PlainUtf8 "$Root\.env.example"
 $envText = $envText -replace '(?m)^FIRST_SUPERUSER_PASSWORD=.*$', "FIRST_SUPERUSER_PASSWORD=$AdminPassword"
+# Версия попадает в .env и дальше в /api/health. Без неё на сервере не
+# отличить «починка не помогла» от «развёрнут прежний образ», и проверка
+# исправлений идёт вслепую.
+if ($envText -match '(?m)^APP_VERSION=') {
+    $envText = $envText -replace '(?m)^APP_VERSION=.*$', "APP_VERSION=$Version"
+} else {
+    $envText = $envText.TrimEnd() + "`nAPP_VERSION=$Version`n"
+}
 Write-PlainUtf8 (Join-Path $Stage ".env") $envText
 
 Copy-Item "$Root\docker-compose.yml"    $Stage
