@@ -106,6 +106,7 @@ export const registryApi = {
     }),
   chat: (bin, message) => api.post('/chat', { bin, message }),
   portrait: (iin) => api.get('/portrait', { params: { iin } }),
+  companyPortrait: (bin) => api.get('/portrait/company', { params: { bin } }),
   stats: (params) => api.get('/stats', { params }),
   health: () => api.get('/health'),
 }

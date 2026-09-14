@@ -187,6 +187,27 @@ async def company_chains(
 
 
 @router.get(
+    "/portrait/company",
+    summary="Портрет организации: активы и операции финмониторинга",
+)
+async def company_portrait(
+    _: CurrentUser,
+    bin: str = Query(..., description="БИН организации"),
+) -> dict:
+    """Справка по организации из тех же витрин, что и справка по лицу.
+
+    Доходов, прописки и особых учётов здесь нет — они о человеке. Активы
+    и операции финмониторинга различают стороны по идентификатору, а не
+    по виду лица, поэтому по БИН читаются так же, как по ИИН.
+    """
+    try:
+        return await portrait_service.build_company_portrait(bin)
+    except ClickHouseError as exc:
+        logger.error("Портрет организации %s не собран: %s", bin, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, clickhouse_detail(exc)) from exc
+
+
+@router.get(
     "/portrait",
     summary="Портрет лица: всё, что о нём известно витринам",
 )

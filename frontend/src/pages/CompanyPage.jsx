@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { errorMessage, registryApi } from '../api/client.js'
 import BeneficiaryProfile from '../components/BeneficiaryProfile.jsx'
+import CompanyPortrait from '../components/CompanyPortrait.jsx'
 import {
   AlgorithmChips,
   DASH,
@@ -605,6 +606,8 @@ export default function CompanyPage() {
       />
 
       <BeneficiaryProfile iin={profileKey} onClose={() => setProfileKey('')} />
+
+      <CompanyPortrait bin={card.company?.taxpayer_iin_bin || bin} />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <ExplainBlock

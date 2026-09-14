@@ -225,6 +225,47 @@ async def _known_people(iins: List[str]) -> set:
     return {str(r.get("iin") or "") for r in rows}
 
 
+def _assets_block(rows: List[Dict], available: bool) -> Dict[str, Any]:
+    """Блок активов. Одинаков у лица и у организации: витрина общая."""
+    return {
+        "available": available,
+        "deals": rows,
+        # Дарение и наследование считаются отдельно: полученное в дар
+        # не оплачивалось своими средствами
+        "purchased_total": round(
+            sum(float(r.get("amount") or 0) for r in rows if not int(r.get("is_gift") or 0)),
+            2,
+        ),
+        "gifted_count": sum(1 for r in rows if int(r.get("is_gift") or 0)),
+    }
+
+
+def _finmon_block(rows: List[Dict], available: bool) -> Dict[str, Any]:
+    """Блок финансового мониторинга, разложенный по направлению.
+
+    Отправлял, получал и «лишь упомянут» разделены: по одному контрагенту
+    нельзя понять, деньги ушли или пришли, а приписывать направление там,
+    где роль его не задаёт, значило бы выдавать догадку за факт.
+    """
+    def by(direction: str) -> List[Dict]:
+        return [r for r in rows if str(r.get("direction") or "") == direction]
+
+    def total(direction: str) -> float:
+        return round(sum(float(r.get("amount_tenge") or 0) for r in by(direction)), 2)
+
+    return {
+        "available": available,
+        "messages": rows,
+        "outgoing": by("отправитель"),
+        "incoming": by("получатель"),
+        "other": by("участник"),
+        "outgoing_total": total("отправитель"),
+        "incoming_total": total("получатель"),
+        "total_tenge": round(sum(float(r.get("amount_tenge") or 0) for r in rows), 2),
+        "suspicious_count": sum(1 for r in rows if str(r.get("susp") or "").strip()),
+    }
+
+
 async def build_portrait(iin: str) -> Dict[str, Any]:
     """Портрет одного лица: всё, что о нём известно витринам.
 
@@ -318,57 +359,9 @@ async def build_portrait(iin: str) -> Dict[str, Any]:
             "government": data["gov"][0],
             "government_available": data["gov"][1],
         },
-        "assets": {
-            "available": data["assets"][1],
-            "deals": data["assets"][0],
-            # Дарение и наследование считаются отдельно: полученное в дар
-            # не оплачивалось своими средствами
-            "purchased_total": round(
-                sum(
-                    float(r.get("amount") or 0)
-                    for r in data["assets"][0]
-                    if not int(r.get("is_gift") or 0)
-                ),
-                2,
-            ),
-            "gifted_count": sum(
-                1 for r in data["assets"][0] if int(r.get("is_gift") or 0)
-            ),
-        },
+        "assets": _assets_block(data["assets"][0], data["assets"][1]),
         "debts": {"available": data["debts"][1], "items": data["debts"][0]},
-        "finmon": {
-            "available": data["finmon"][1],
-            "messages": data["finmon"][0],
-            # Разделение по направлению: отправлял или получал. Для ролей,
-            # где лицо лишь упомянуто, направление неизвестно — такие
-            # операции вынесены отдельно, а не приписаны к одной из сторон.
-            "outgoing": [
-                r for r in data["finmon"][0]
-                if str(r.get("direction") or "") == "отправитель"
-            ],
-            "incoming": [
-                r for r in data["finmon"][0]
-                if str(r.get("direction") or "") == "получатель"
-            ],
-            "other": [
-                r for r in data["finmon"][0]
-                if str(r.get("direction") or "") == "участник"
-            ],
-            "outgoing_total": round(sum(
-                float(r.get("amount_tenge") or 0) for r in data["finmon"][0]
-                if str(r.get("direction") or "") == "отправитель"
-            ), 2),
-            "incoming_total": round(sum(
-                float(r.get("amount_tenge") or 0) for r in data["finmon"][0]
-                if str(r.get("direction") or "") == "получатель"
-            ), 2),
-            "total_tenge": round(
-                sum(float(r.get("amount_tenge") or 0) for r in data["finmon"][0]), 2
-            ),
-            "suspicious_count": sum(
-                1 for r in data["finmon"][0] if str(r.get("susp") or "").strip()
-            ),
-        },
+        "finmon": _finmon_block(data["finmon"][0], data["finmon"][1]),
         # Блок заполняется всегда, даже пустой: отсутствие меток — тоже сведение
         "risks": {"available": risks_available, "labels": risk_labels},
         "special": {
@@ -383,6 +376,55 @@ async def build_portrait(iin: str) -> Dict[str, Any]:
             "erdr": data["erdr"][0],
             "erdr_available": data["erdr"][1],
         },
+    }
+
+
+async def build_company_portrait(bin_value: str) -> Dict[str, Any]:
+    """Портрет организации: активы и операции финмониторинга по её БИН.
+
+    Витрины активов и финмониторинга различают стороны сделки не по виду
+    лица, а по идентификатору, и БИН лежит в тех же колонках, что и ИИН.
+    Поэтому запросы те же, что у портрета лица, — меняется лишь то, чей
+    идентификатор подставлен.
+
+    Блоков о доходах, прописке и особых учётах здесь нет: они о человеке
+    и к организации отношения не имеют. Метки реестров риска остаются —
+    организация тоже бывает должником.
+    """
+    bin_value = (bin_value or "").strip()
+    if not bin_value:
+        return {"bin": "", "note": "БИН не указан"}
+
+    base = {"iin": bin_value}
+    tasks = {
+        "assets": _rows(settings.PORTRAIT_ASSETS, ps.build_assets_sql, base),
+        "finmon": _rows(
+            settings.PORTRAIT_FINMON,
+            ps.build_finmon_sql,
+            {**base, "lim": settings.PORTRAIT_FINMON_LIMIT},
+        ),
+    }
+
+    # Обе витрины опрашиваются одновременно: последовательно вышло бы
+    # вдвое дольше без всякой на то причины
+    names = list(tasks)
+    results = await asyncio.gather(*(tasks[n] for n in names), return_exceptions=True)
+
+    data: Dict[str, Tuple[List[Dict], bool]] = {}
+    for name, result in zip(names, results):
+        if isinstance(result, Exception):
+            logger.warning("Витрина %s не ответила: %s", name, result)
+            data[name] = ([], False)
+        else:
+            data[name] = result
+
+    risk_labels, risks_available = await _risks(bin_value)
+
+    return {
+        "bin": bin_value,
+        "assets": _assets_block(data["assets"][0], data["assets"][1]),
+        "finmon": _finmon_block(data["finmon"][0], data["finmon"][1]),
+        "risks": {"available": risks_available, "labels": risk_labels},
     }
 
 
