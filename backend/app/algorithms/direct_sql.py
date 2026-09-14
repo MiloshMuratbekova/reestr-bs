@@ -38,7 +38,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from app.core.config import settings
 
@@ -721,7 +721,11 @@ def filter_params(filters: Optional[Dict[str, object]] = None) -> Dict[str, str]
     return params
 
 
-def risk_condition(keys: Optional[List[str]], column: str) -> str:
+def risk_condition(
+    keys: Optional[List[str]],
+    column: str,
+    sources: Optional[Dict[str, object]] = None,
+) -> str:
     """Условие «лицо попало хотя бы в один из выбранных реестров риска».
 
     Пустая строка, если метки не выбраны. Реестры опрашиваются подзапросом
@@ -730,7 +734,7 @@ def risk_condition(keys: Optional[List[str]], column: str) -> str:
     """
     from app.algorithms.portrait_sql import build_risk_iins_sql
 
-    inner = build_risk_iins_sql(list(keys or []))
+    inner = build_risk_iins_sql(list(keys or []), sources)
     if not inner:
         return ""
     return f"{column} IN (SELECT iin FROM (\n    {inner}\n))"

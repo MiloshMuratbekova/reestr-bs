@@ -47,16 +47,25 @@ async def _resolve(name: str) -> Optional[str]:
 
     candidates: List[str] = []
     if "." in name:
+        database, table = name.split(".", 1)
         candidates.append(name)
-        # То же имя в базе по умолчанию — на случай, если витрину перенесли
-        candidates.append(name.split(".", 1)[1])
+        # Имя из словаря — только ожидаемое. Ту же таблицу могли завести
+        # в другой базе, и раньше поиск это пропускал: к имени с базой
+        # запасные варианты не подставлялись вовсе, и витрина считалась
+        # отсутствующей, хотя лежала рядом.
+        candidates.append(f"{settings.CLICKHOUSE_DATABASE}.{table}")
+        candidates.extend(
+            f"{db}.{table}" for db in FALLBACK_DATABASES if db != database
+        )
     else:
         candidates.append(f"{settings.CLICKHOUSE_DATABASE}.{name}")
         candidates.extend(f"{db}.{name}" for db in FALLBACK_DATABASES)
 
+    seen = set()
     for candidate in candidates:
-        if "." not in candidate:
+        if "." not in candidate or candidate in seen:
             continue
+        seen.add(candidate)
         database, table = candidate.split(".", 1)
         try:
             if await clickhouse.table_exists(database, table):
@@ -82,17 +91,73 @@ async def _rows(name: str, builder, params: Dict[str, Any]) -> Tuple[List[Dict],
         return [], False
 
 
+def _iin_column(columns: set, preferred: str) -> Optional[str]:
+    """Находит в таблице колонку с ИИН, как бы она ни называлась.
+
+    Имена в реестрах разнобойные: iin, IIN, iin_bin, а где-то
+    «IIN ANALIZIRUEMYI» с пробелом. Угадывать их по списку бесполезно —
+    на каждом стенде свой набор, — поэтому колонка ищется по факту:
+    сначала ожидаемая, затем точные совпадения, затем любая, в имени
+    которой есть «iin». Ничего не найдя, возвращает None, и метка просто
+    не участвует в отборе.
+
+    Имя с пробелом или в другом регистре обязательно берётся в двойные
+    кавычки, иначе ClickHouse разберёт его как два слова.
+    """
+    plain = preferred.strip('"')
+    if plain in columns:
+        return f'"{plain}"'
+
+    lowered = {c.lower(): c for c in columns}
+    for candidate in ("iin", "iin_bin", "iin_analiziruemyi", "iin analiziruemyi"):
+        if candidate in lowered:
+            return f'"{lowered[candidate]}"'
+
+    # Последняя попытка: любая колонка, в имени которой есть «iin».
+    # Берётся самая короткая — у длинных обычно уточняющий смысл
+    # вроде iin_bin_pokup, а нам нужен сам идентификатор лица.
+    matches = sorted((c for c in columns if "iin" in c.lower()), key=len)
+    return f'"{matches[0]}"' if matches else None
+
+
+async def _registry_source(table: str, column: str) -> Optional[Tuple[str, str]]:
+    """Настоящие имя таблицы и колонка с ИИН, если реестр найден.
+
+    Реестр ищется так же, как витрины портрета: имя из словаря — лишь
+    ожидаемое, лежать он может и в другой базе. И метки в портрете,
+    и отбор в списках опираются на один и тот же поиск — иначе метка
+    показывалась бы, а отбор по ней падал.
+    """
+    resolved = await _resolve(table)
+    if not resolved:
+        return None
+    database, name = resolved.split(".", 1)
+    try:
+        columns = await clickhouse.table_columns(database, name)
+    except ClickHouseError as exc:
+        logger.warning("Реестр %s не прочитан: %s", resolved, exc)
+        return None
+    if not columns:
+        return None
+
+    found = _iin_column(columns, column)
+    if not found:
+        logger.warning(
+            "В реестре %s не нашлось колонки с ИИН (есть: %s)",
+            resolved,
+            ", ".join(sorted(columns)[:10]),
+        )
+        return None
+    return resolved, found
+
+
 async def _usable_registries() -> List[Tuple[str, str, str]]:
-    """Реестры, у которых есть и таблица, и нужная колонка."""
+    """Реестры, где есть таблица и найдена колонка с ИИН."""
     usable: List[Tuple[str, str, str]] = []
     for table, column, label in ps.RISK_REGISTRIES:
-        database, name = table.split(".", 1)
-        try:
-            columns = await clickhouse.table_columns(database, name)
-        except ClickHouseError:
-            continue
-        if columns and column.strip('"') in columns:
-            usable.append((table, column, label))
+        source = await _registry_source(table, column)
+        if source:
+            usable.append((source[0], source[1], label))
     return usable
 
 
@@ -344,34 +409,42 @@ async def available_risk_keys(keys: List[str]) -> List[str]:
             continue
 
         _label, table, column = RISK_FILTERS[key]
-        database, name = table.split(".", 1)
-        try:
-            columns = await clickhouse.table_columns(database, name)
-        except ClickHouseError as exc:
-            logger.warning("Реестр %s не проверен: %s", table, exc)
+        # И таблица, и колонка берутся по факту, а не по ожидаемому имени:
+        # отбор по несуществующему имени роняет весь список.
+        source = await _registry_source(table, column)
+        if not source:
+            logger.info("Реестр %s недоступен — отбор по метке пропущен", table)
             continue
 
-        if not columns:
-            logger.info("Реестра %s нет — отбор по метке пропущен", table)
-            continue
-
-        # Мало того, что таблица есть: в ней должна быть именно та колонка,
-        # по которой мы ищем. Имена в реестрах разнобойные, и отбор по
-        # несуществующей колонке роняет весь список так же, как отбор
-        # по несуществующей таблице.
-        plain = column.strip('"')
-        if plain not in columns:
-            logger.warning(
-                "В реестре %s нет колонки %s (есть: %s) — отбор по метке пропущен",
-                table,
-                plain,
-                ", ".join(sorted(columns)[:10]),
-            )
-            continue
-
+        _risk_sources[key] = source
         _risk_available[key] = True
         result.append(key)
     return result
+
+
+#: Найденные таблица и колонка с ИИН по каждой метке — их подставляет отбор
+_risk_sources: Dict[str, Tuple[str, str]] = {}
+
+
+def risk_sources(keys: List[str]) -> Dict[str, Tuple[str, str]]:
+    """Найденные таблица и колонка по меткам — для подстановки в отбор."""
+    return {key: _risk_sources[key] for key in keys if key in _risk_sources}
+
+
+def forget_risk(keys: List[str]) -> None:
+    """Забыть проверку реестров: следующий отбор переспросит базу.
+
+    Вызывается, когда отбор всё-таки не отработал. Запомненное
+    «реестр в порядке» тогда неверно, и держаться за него значит
+    повторять ту же ошибку на каждом запросе.
+    """
+    from app.algorithms.portrait_sql import RISK_FILTERS
+
+    for key in keys:
+        _risk_available.pop(key, None)
+        _risk_sources.pop(key, None)
+        # Поиск таблицы тоже мог промахнуться — пусть ищет заново
+        _resolved.pop(RISK_FILTERS[key][1], None)
 
 
 async def risk_labels_for(iins: List[str]) -> Dict[str, List[str]]:

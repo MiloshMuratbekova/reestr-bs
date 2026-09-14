@@ -32,6 +32,9 @@ class CompanyListResponse(BaseModel):
     total: int
     page: int
     limit: int
+    #: Отбор по меткам риска не отработал и был снят. Молчать нельзя:
+    #: иначе список без отбора выглядит как список с отбором.
+    risk_filter_failed: bool = False
     scope: str = "registry"
 
 
@@ -56,6 +59,9 @@ class BeneficiaryListResponse(BaseModel):
     total: int
     page: int
     limit: int
+    #: Отбор по меткам риска не отработал и был снят. Молчать нельзя:
+    #: иначе список без отбора выглядит как список с отбором.
+    risk_filter_failed: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,38 @@ from app.services.settings_service import clamp_rows, runtime
 
 logger = get_logger(__name__)
 
+
+async def _fetch_or_drop_risk(
+    sql: str,
+    params: Dict[str, Any],
+    without_risk: Optional[Callable[[List[str]], str]],
+    keys: List[str],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Список любой ценой: если отбор по меткам риска сорвал запрос — снять его.
+
+    Реестры риска ведут не мы, и в них всё бывает: таблицу переименовали,
+    колонку назвали иначе, доступ закрыли. Проверки перед запросом это
+    ловят не всегда, а пользователю в ответ прилетало «не удалось получить
+    список» — и вместо данных пустой экран. Здесь запрос повторяется без
+    отбора, а о том, что отбор снят, ответ сообщает отдельным признаком:
+    показать всех молча значило бы выдать полный список за отобранный.
+    """
+    try:
+        return await clickhouse.fetch_all(sql, params), False
+    except ClickHouseError as exc:
+        if not without_risk:
+            raise
+        logger.warning(
+            "Отбор по меткам риска (%s) не отработал: %s — показываю список без него",
+            ", ".join(keys) or "—",
+            exc,
+        )
+        # Запомненное «реестр в порядке» оказалось неверным: пусть
+        # следующий запрос переспросит базу, а не повторяет ошибку.
+        portrait_service.forget_risk(keys)
+        return await clickhouse.fetch_all(without_risk([]), params), True
+
+
 #: Сколько держать в памяти результат сводного разреза, секунд.
 #: Реестр пересчитывается ночью, поэтому пять минут никак не влияют
 #: на актуальность, но снимают повторные проходы по всем алгоритмам.
@@ -133,6 +165,9 @@ async def list_companies(
     if sort not in COMPANY_SORT_COLUMNS:
         sort = "priority"
 
+    usable: List[str] = []
+    without_risk: Optional[Callable[[List[str]], str]] = None
+
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
@@ -141,12 +176,19 @@ async def list_companies(
         # Несуществующий реестр уронил бы весь список, поэтому
         # в отбор идут только те метки, чьи таблицы есть в базе
         usable = await portrait_service.available_risk_keys(risks or [])
-        risk = direct_sql.risk_condition(usable, "d.taxpayer_iin_bin")
-        sql = direct_sql.build_companies_list_sql(
-            merged, columns,
-            conditions=conditions + ([risk] if risk else []),
-            sort=sort, order=order, limit=limit, offset=offset,
+        risk = direct_sql.risk_condition(
+            usable, "d.taxpayer_iin_bin", portrait_service.risk_sources(usable)
         )
+
+        def build(extra: List[str]) -> str:
+            return direct_sql.build_companies_list_sql(
+                merged, columns,
+                conditions=conditions + extra,
+                sort=sort, order=order, limit=limit, offset=offset,
+            )
+
+        sql = build([risk] if risk else [])
+        without_risk = build if risk else None
     else:
         sql = build_companies_list_sql(
             tables,
@@ -154,7 +196,7 @@ async def list_companies(
             conditions=conditions, sort=sort, order=order,
             limit=limit, offset=offset,
         )
-    rows = await clickhouse.fetch_all(sql, params)
+    rows, risk_failed = await _fetch_or_drop_risk(sql, params, without_risk, usable)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
     for row in rows:
@@ -163,7 +205,14 @@ async def list_companies(
         row["best_priority"] = int(row.get("best_priority") or 0)
         row["is_state_owned"] = bool(row.get("is_state_owned"))
 
-    return {"items": rows, "total": total, "page": page, "limit": limit, "scope": "registry"}
+    return {
+        "items": rows,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "scope": "registry",
+        "risk_filter_failed": risk_failed,
+    }
 
 
 async def _list_companies_from_dictionary(
@@ -317,16 +366,26 @@ async def list_beneficiaries(
     if sort not in BENEFICIARY_SORT_COLUMNS:
         sort = "priority"
 
+    usable: List[str] = []
+    without_risk: Optional[Callable[[List[str]], str]] = None
+
     source = await algorithm_service.merged_source()
     if source:
         merged, columns = source
         usable = await portrait_service.available_risk_keys(risks or [])
-        risk = direct_sql.risk_condition(usable, "r.benefeciary_iin_bin")
-        sql = direct_sql.build_beneficiaries_list_sql(
-            merged, columns,
-            conditions=conditions + ([risk] if risk else []),
-            sort=sort, order=order, limit=limit, offset=offset,
+        risk = direct_sql.risk_condition(
+            usable, "r.benefeciary_iin_bin", portrait_service.risk_sources(usable)
         )
+
+        def build(extra: List[str]) -> str:
+            return direct_sql.build_beneficiaries_list_sql(
+                merged, columns,
+                conditions=conditions + extra,
+                sort=sort, order=order, limit=limit, offset=offset,
+            )
+
+        sql = build([risk] if risk else [])
+        without_risk = build if risk else None
     else:
         sql = build_beneficiaries_list_sql(
             tables,
@@ -334,7 +393,7 @@ async def list_beneficiaries(
             conditions=conditions, sort=sort, order=order,
             limit=limit, offset=offset,
         )
-    rows = await clickhouse.fetch_all(sql, params)
+    rows, risk_failed = await _fetch_or_drop_risk(sql, params, without_risk, usable)
 
     total = int(rows[0].get("total_count") or 0) if rows else 0
     # Дочистка имён моделью — та же, что в карточке компании, чтобы список
@@ -346,7 +405,13 @@ async def list_beneficiaries(
         row["best_priority"] = int(row.get("best_priority") or 0)
         row["is_nonresident"] = bool(int(row.get("is_nonresident") or 0))
 
-    return {"items": rows, "total": total, "page": page, "limit": limit}
+    return {
+        "items": rows,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "risk_filter_failed": risk_failed,
+    }
 
 
 async def beneficiary_profile(session: AsyncSession, iin: str) -> Dict[str, Any]:

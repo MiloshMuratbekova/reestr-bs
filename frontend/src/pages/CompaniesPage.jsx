@@ -207,6 +207,13 @@ export default function CompaniesPage() {
         </InfoMessage>
       )}
 
+      {data.risk_filter_failed && (
+        <InfoMessage tone="warning">
+          Отбор по меткам риска не отработал: реестры недоступны. Показан
+          список без этого отбора.
+        </InfoMessage>
+      )}
+
       {error && <ErrorMessage message={error} onRetry={load} />}
 
       {loading ? (

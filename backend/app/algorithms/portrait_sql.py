@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.core.config import settings
 
@@ -491,17 +491,30 @@ RISK_FILTERS = {
 }
 
 
-def build_risk_iins_sql(keys: List[str]) -> str:
+def build_risk_iins_sql(
+    keys: List[str],
+    sources: Optional[Dict[str, Tuple[str, str]]] = None,
+) -> str:
     """Подзапрос: ИИН всех лиц, попавших хотя бы в один из реестров.
 
     Возвращает пустую строку, если ключи не заданы или незнакомы — тогда
     отбор просто не применяется. Имена таблиц берутся из словаря выше,
     ввод пользователя в SQL не попадает.
+
+    Таблицу и колонку передаёт вызывающий: в словаре они только
+    ожидаемые, а настоящие вычитываются из базы. Реестр может лежать
+    в другой базе и называть ИИН по-своему, и отбор по выдуманному
+    имени роняет весь список.
     """
-    parts = [
-        f"SELECT {_text('r.' + RISK_FILTERS[key][2])} AS iin"
-        f" FROM {RISK_FILTERS[key][1]} AS r"
-        for key in keys
-        if key in RISK_FILTERS
-    ]
+    found = sources or {}
+    parts = []
+    for key in keys:
+        if key not in RISK_FILTERS:
+            continue
+        table, column = found.get(
+            key, (RISK_FILTERS[key][1], RISK_FILTERS[key][2])
+        )
+        parts.append(
+            f"SELECT {_text('r.' + column)} AS iin FROM {table} AS r"
+        )
     return "\n    UNION ALL\n    ".join(parts)
