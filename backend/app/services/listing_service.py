@@ -761,12 +761,12 @@ async def dashboard(
     tables = await algorithm_service.active_result_tables(session)
 
     async def compute() -> Dict[str, Any]:
+        # Здесь только то, что считает сам дашборд. Числа по компаниям
+        # и лицам приходят из общей статистики, и ставить им ноль
+        # по умолчанию нельзя: при слиянии ноль перекрывал настоящее
+        # значение, и карточки показывали пустоту.
         payload: Dict[str, Any] = {
             "total_companies": 0,
-            "companies_with_bs": 0,
-            "registration_companies": 0,
-            "assumed_companies": 0,
-            "avg_priority": 0.0,
             "top_by_beneficiaries": [],
             "top_by_priority": [],
             # Отбор возможен только при прямом чтении сводной таблицы:

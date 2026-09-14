@@ -82,16 +82,23 @@ async def _rows(name: str, builder, params: Dict[str, Any]) -> Tuple[List[Dict],
         return [], False
 
 
-async def _risks(iin: str) -> Tuple[List[str], bool]:
-    """Метки из реестров риска — только по тем, что реально существуют."""
-    available = []
+async def _usable_registries() -> List[Tuple[str, str, str]]:
+    """Реестры, у которых есть и таблица, и нужная колонка."""
+    usable: List[Tuple[str, str, str]] = []
     for table, column, label in ps.RISK_REGISTRIES:
         database, name = table.split(".", 1)
         try:
-            if await clickhouse.table_exists(database, name):
-                available.append((table, column, label))
+            columns = await clickhouse.table_columns(database, name)
         except ClickHouseError:
             continue
+        if columns and column.strip('"') in columns:
+            usable.append((table, column, label))
+    return usable
+
+
+async def _risks(iin: str) -> Tuple[List[str], bool]:
+    """Метки из реестров риска — только по тем, что реально существуют."""
+    available = await _usable_registries()
     if not available:
         return [], False
 
@@ -336,18 +343,34 @@ async def available_risk_keys(keys: List[str]) -> List[str]:
             result.append(key)
             continue
 
-        _label, table, _column = RISK_FILTERS[key]
+        _label, table, column = RISK_FILTERS[key]
         database, name = table.split(".", 1)
         try:
-            exists = await clickhouse.table_exists(database, name)
+            columns = await clickhouse.table_columns(database, name)
         except ClickHouseError as exc:
             logger.warning("Реестр %s не проверен: %s", table, exc)
             continue
-        if exists:
-            _risk_available[key] = True
-            result.append(key)
-        else:
-            logger.info("Реестр %s недоступен — отбор по метке пропущен", table)
+
+        if not columns:
+            logger.info("Реестра %s нет — отбор по метке пропущен", table)
+            continue
+
+        # Мало того, что таблица есть: в ней должна быть именно та колонка,
+        # по которой мы ищем. Имена в реестрах разнобойные, и отбор по
+        # несуществующей колонке роняет весь список так же, как отбор
+        # по несуществующей таблице.
+        plain = column.strip('"')
+        if plain not in columns:
+            logger.warning(
+                "В реестре %s нет колонки %s (есть: %s) — отбор по метке пропущен",
+                table,
+                plain,
+                ", ".join(sorted(columns)[:10]),
+            )
+            continue
+
+        _risk_available[key] = True
+        result.append(key)
     return result
 
 
@@ -362,14 +385,7 @@ async def risk_labels_for(iins: List[str]) -> Dict[str, List[str]]:
     if not codes:
         return {}
 
-    available = []
-    for table, column, label in ps.RISK_REGISTRIES:
-        database, name = table.split(".", 1)
-        try:
-            if await clickhouse.table_exists(database, name):
-                available.append((table, column, label))
-        except ClickHouseError:
-            continue
+    available = await _usable_registries()
     if not available:
         return {}
 
